@@ -8,13 +8,13 @@ pnpm-debug.log*
 lerna-debug.log*
 
 # Build artifacts
-dist
-dist-ssr
-*.local
-.next
+/dist/
+/dist-ssr/
+/.local/
+/.next/
 
 # Dependency directories
-node_modules
+/node_modules/
 .pnp
 .pnp.js
 
