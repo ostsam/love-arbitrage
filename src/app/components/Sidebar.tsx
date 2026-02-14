@@ -1,5 +1,5 @@
 import React from 'react';
-import { Home, BarChart2, User, Settings, Database, Activity, ShieldAlert, Zap } from 'lucide-react';
+import { Home, BarChart2, User, Settings, Database, Activity, ShieldAlert, Zap, Trophy } from 'lucide-react';
 
 interface SidebarProps {
   currentTab: string;
@@ -10,7 +10,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onTabChange }) => 
   const links = [
     { id: 'dashboard', icon: Home, label: 'Terminal Home' },
     { id: 'market', icon: BarChart2, label: 'Global Markets' },
+    { id: 'private', icon: ShieldAlert, label: 'Private Equity' },
     { id: 'portfolio', icon: Activity, label: 'My Portfolio' },
+    { id: 'leaderboard', icon: Trophy, label: 'Leaderboard' },
     { id: 'insider', icon: Database, label: 'Insider Intel' },
     { id: 'profile', icon: User, label: 'User Profile' },
   ];

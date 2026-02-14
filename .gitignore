@@ -41,3 +41,5 @@ lerna-debug.log*
 
 # Testing
 /coverage
+
+node_modules
