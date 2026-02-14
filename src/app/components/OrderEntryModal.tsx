@@ -13,6 +13,7 @@ interface OrderEntryModalProps {
   betType: 'LONG' | 'SHORT' | 'YES' | 'NO';
   question?: string;
   odds?: string;
+  balance: number;
   onConfirm: (amount: number) => void;
 }
 
@@ -23,6 +24,7 @@ export const OrderEntryModal: React.FC<OrderEntryModalProps> = ({
   betType,
   question,
   odds,
+  balance,
   onConfirm
 }) => {
   const [amount, setAmount] = useState<string>('100');
@@ -107,7 +109,7 @@ export const OrderEntryModal: React.FC<OrderEntryModalProps> = ({
           <div className="space-y-1.5">
             <div className="flex justify-between items-end">
               <label className="font-['Space_Mono'] text-[9px] text-[#717182] uppercase font-bold">Wager Amount</label>
-              <span className="font-['Space_Mono'] text-[8px] text-[#00f090]">Bal: $14k</span>
+              <span className="font-['Space_Mono'] text-[8px] text-[#00f090]">BAL: ${balance.toLocaleString()}</span>
             </div>
             <div className="relative">
               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[#717182] font-['Space_Mono'] text-xs">$</span>

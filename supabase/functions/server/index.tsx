@@ -27,14 +27,13 @@ const getSupabase = () => {
   return createClient(url, key)
 }
 
-// Helper to handle BOTH prefixed and non-prefixed routes (for robustness across Supabase versions)
+// Helper to handle BOTH prefixed and non-prefixed routes
 const routeHandler = (path: string, handler: any, method: 'get' | 'post' = 'get', useAuth = true) => {
   const fullPath = path.startsWith('/') ? path : `/${path}`
   const prefixedPath = `/make-server-c0ec1358${fullPath}`
   
   const wrappedHandler = async (c: any) => {
     if (useAuth) {
-      // Use X-User-Token to bypass potential gateway JWT verification issues
       const userToken = c.req.header('X-User-Token') || c.req.header('Authorization')?.split(' ')[1]
       
       if (!userToken || userToken === Deno.env.get('SUPABASE_ANON_KEY')) {
@@ -45,12 +44,7 @@ const routeHandler = (path: string, handler: any, method: 'get' | 'post' = 'get'
       const { data: { user }, error } = await supabase.auth.getUser(userToken)
       
       if (error || !user) {
-        console.error('AUTH_FAILED:', error?.message || 'User not found')
-        return c.json({ 
-          error: 'Unauthorized', 
-          details: error?.message || 'Session invalid or expired',
-          hint: 'Please logout and login again to refresh your terminal session.'
-        }, 401)
+        return c.json({ error: 'Unauthorized', details: error?.message || 'Session invalid' }, 401)
       }
       
       c.set('user', user)
@@ -67,7 +61,7 @@ const routeHandler = (path: string, handler: any, method: 'get' | 'post' = 'get'
   }
 }
 
-// Routes
+// Auth Routes
 routeHandler('signup', async (c) => {
   const { email, password, name } = await c.req.json()
   const supabase = getSupabase()
@@ -138,25 +132,256 @@ routeHandler('update-profile', async (c) => {
   return c.json(updatedProfile)
 }, 'post')
 
-routeHandler('analyze-relationship', async (c) => {
-  const { logs, names } = await c.req.json()
-  const apiKey = Deno.env.get('ANTHROPIC_API_KEY')
+// Financial Routes
+routeHandler('deposit', async (c) => {
+  const user = c.get('user')
+  const { amount } = await c.req.json()
+  const profile = await kv.get(`user:profile:${user.id}`)
   
-  if (!apiKey) {
-    return c.json({
-      price: (Math.random() * 100 + 10).toFixed(2),
-      volatility: ['HIGH', 'MED', 'LOW', 'EXTREME'][Math.floor(Math.random() * 4)],
-      sentiment: Math.random(),
-      odds: {
-        yes: `${Math.floor(Math.random() * 90 + 5)}%`,
-        no: `${Math.floor(Math.random() * 90 + 5)}%`
-      },
-      chart: Array.from({ length: 20 }, () => Math.random() * 100),
-      summary: "Sentiment analysis indicates a high probability of friction. Manual bypass active due to missing API key."
-    })
+  if (!profile) return c.json({ error: 'Profile not found' }, 404)
+  
+  profile.balance = (profile.balance || 0) + Number(amount)
+  await kv.set(`user:profile:${user.id}`, profile)
+  
+  return c.json({ success: true, balance: profile.balance })
+}, 'post')
+
+routeHandler('place-bet', async (c) => {
+  const user = c.get('user')
+  const { asset, betType, amount, question, odds } = await c.req.json()
+  const profile = await kv.get(`user:profile:${user.id}`)
+  
+  if (!profile) return c.json({ error: 'Profile not found' }, 404)
+  if (profile.balance < amount) return c.json({ error: 'Insufficient liquidity in terminal' }, 400)
+  
+  const bet = {
+    id: `BET_${Date.now()}`,
+    symbol: asset.symbol,
+    names: asset.names,
+    side: betType,
+    amount,
+    price: asset.price,
+    question,
+    odds,
+    status: 'OPEN',
+    timestamp: new Date().toISOString(),
+    pnl: '$0.00',
+    pnlUp: true
+  }
+  
+  profile.balance -= amount
+  profile.portfolio = [bet, ...(profile.portfolio || [])]
+  
+  await kv.set(`user:profile:${user.id}`, profile)
+  
+  return c.json({ success: true, profile })
+}, 'post')
+
+routeHandler('sell-bet', async (c) => {
+  const user = c.get('user')
+  const { betId } = await c.req.json()
+  const profile = await kv.get(`user:profile:${user.id}`)
+  
+  if (!profile || !profile.portfolio) return c.json({ error: 'Profile or portfolio not found' }, 404)
+  
+  const betIndex = profile.portfolio.findIndex((b: any) => b.id === betId)
+  if (betIndex === -1) return c.json({ error: 'Position not found' }, 404)
+  
+  const bet = profile.portfolio[betIndex]
+  const liquidationValue = Number(bet.amount)
+  
+  profile.balance += liquidationValue
+  profile.portfolio.splice(betIndex, 1)
+  
+  await kv.set(`user:profile:${user.id}`, profile)
+  
+  return c.json({ success: true, balance: profile.balance, portfolio: profile.portfolio })
+}, 'post')
+
+// Market Data Routes (GLOBAL REALTIME)
+const calculateAndUpdateGli = async () => {
+  const assets = await kv.getByPrefix('market:asset:')
+  if (!assets || assets.length === 0) return
+  
+  const totalValue = assets.reduce((sum: number, a: any) => sum + parseFloat(a.price || 0), 0)
+  const averageValue = totalValue / assets.length
+  
+  const history = await kv.get('market:gli:history') || []
+  const newEntry = {
+    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    value: parseFloat(averageValue.toFixed(2)),
+    timestamp: Date.now()
+  }
+  
+  // Keep last 100 points
+  await kv.set('market:gli:history', [...history, newEntry].slice(-100))
+}
+
+routeHandler('get-gli-history', async (c) => {
+  const history = await kv.get('market:gli:history') || []
+  return c.json({ history })
+})
+
+routeHandler('get-markets', async (c) => {
+  const assets = await kv.getByPrefix('market:asset:')
+  if (!assets || assets.length === 0) {
+    return c.json({ assets: [], needsSeeding: true })
+  }
+  
+  // Repair assets with missing propBets on the fly
+  let repaired = false;
+  for (const asset of assets) {
+    if (!asset.propBets || asset.propBets.length === 0) {
+      asset.propBets = Array.from({ length: 12 }, (_, i) => ({
+        id: `repair_prop_${i}_${Date.now()}`,
+        question: [
+          "Will they be seen together this week?", "Will they post a selfie?", 
+          "Will they delete a photo?", "Will a third party intervene?",
+          "Will they announce a split?", "Will they get engaged?",
+          "Will they go on a trip?", "Will they move house?",
+          "Will they attend a red carpet?", "Will they block each other?",
+          "Will a family member comment?", "Will they start a business?"
+        ][i],
+        yesOdds: `${Math.floor(Math.random() * 80 + 10)}%`,
+        noOdds: `${Math.floor(Math.random() * 80 + 10)}%`,
+        rsi: Math.floor(Math.random() * 100),
+        volume: '$0',
+        expiry: '30D'
+      }));
+      await kv.set(`market:asset:${asset.symbol}`, asset);
+      repaired = true;
+    }
   }
 
-  const prompt = `Analyze relationship between ${names}. logs: ${logs}. Return JSON: {price:0-200, volatility:string, sentiment:0-1, odds:{yes:string, no:string}, chart:number[], summary:string}`
+  return c.json({ assets: repaired ? await kv.getByPrefix('market:asset:') : assets })
+})
+
+routeHandler('seed-global-markets', async (c) => {
+  const { defaultAssets } = await c.req.json()
+  for (const asset of defaultAssets) {
+    const existing = await kv.get(`market:asset:${asset.symbol}`)
+    if (!existing) {
+      // Ensure every asset has prop bets on initialization
+      if (!asset.propBets || asset.propBets.length === 0) {
+        asset.propBets = Array.from({ length: 12 }, (_, i) => ({
+          id: `seed_prop_${i}`,
+          question: [
+            "Will they be seen together this week?", "Will they post a selfie?", 
+            "Will they delete a photo?", "Will a third party intervene?",
+            "Will they announce a split?", "Will they get engaged?",
+            "Will they go on a trip?", "Will they move house?",
+            "Will they attend a red carpet?", "Will they block each other?",
+            "Will a family member comment?", "Will they start a business?"
+          ][i],
+          yesOdds: `${Math.floor(Math.random() * 80 + 10)}%`,
+          noOdds: `${Math.floor(Math.random() * 80 + 10)}%`,
+          rsi: Math.floor(Math.random() * 100),
+          volume: '$0',
+          expiry: '30D'
+        }));
+      }
+      await kv.set(`market:asset:${asset.symbol}`, { ...asset, lastUpdated: new Date().toISOString() })
+    }
+  }
+
+  // Seed initial intel logs if empty
+  const logs = await kv.get('intel:logs')
+  if (!logs || logs.length === 0) {
+    const initialLogs = [
+      { id: 1, source: 'WIRETAP_BETA', symbol: '$TAY-TRAV', message: "Low-frequency argument detected in private suite. Keyword: 'pre-nup'.", time: '2m ago', severity: 'HIGH' },
+      { id: 2, source: 'PABLO_GOSSIP', symbol: '$BEN-JEN', message: "Affleck seen moving boxes out of West Hollywood estate. 42% confidence.", time: '14m ago', severity: 'CRITICAL' },
+      { id: 3, source: 'SAT_INTEL', symbol: '$TOM-ZEND', message: "Zendaya's stylist unfollowed Holland on private Alt. Bearish signal.", time: '45m ago', severity: 'MED' },
+    ]
+    await kv.set('intel:logs', initialLogs)
+  }
+  
+  await calculateAndUpdateGli()
+
+  return c.json({ success: true })
+}, 'post')
+
+routeHandler('save-private-asset', async (c) => {
+  const user = c.get('user')
+  const asset = await c.req.json()
+  const assetData = { 
+    ...asset, 
+    creatorId: user.id, 
+    isGlobal: true, 
+    lastUpdated: new Date().toISOString() 
+  }
+  await kv.set(`market:asset:${assetData.symbol}`, assetData)
+  return c.json({ success: true, asset: assetData })
+}, 'post')
+
+routeHandler('get-intel', async (c) => {
+  let logs = await kv.get('intel:logs')
+  
+  // Auto-seed if empty to prevent "Waiting Forever" state
+  if (!logs || logs.length === 0) {
+    logs = [
+      { id: Date.now(), source: 'SYSTEM_BOOT', symbol: '$SYS', message: "Global intelligence node synchronized. Monitoring high-frequency social metadata...", time: 'JUST_NOW', severity: 'LOW' },
+      { id: Date.now() - 1000, source: 'WIRETAP_BETA', symbol: '$TAY-TRAV', message: "Encrypted packet intercepted: 'NDA' mentioned in legal correspondence.", time: '1m ago', severity: 'HIGH' },
+      { id: Date.now() - 2000, source: 'PABLO_GOSSIP', symbol: '$BEN-JEN', message: "Geospatial data shows $BEN at local Dunkin. Vibe: AGITATED.", time: '2m ago', severity: 'MED' }
+    ]
+    await kv.set('intel:logs', logs)
+  }
+  
+  return c.json({ logs })
+})
+
+routeHandler('refresh-market-pulse', async (c) => {
+  const { symbol } = await c.req.json()
+  const asset = await kv.get(`market:asset:${symbol}`)
+  if (!asset) return c.json({ error: 'Asset not found' }, 404)
+
+  const apiKey = Deno.env.get('ANTHROPIC_API_KEY')
+  
+  if (!apiKey || apiKey === 'your_api_key_here') {
+    const priceChange = (Math.random() * 4 - 2).toFixed(2)
+    asset.price = (parseFloat(asset.price) + parseFloat(priceChange)).toFixed(2)
+    asset.change = `${parseFloat(priceChange) >= 0 ? '+' : ''}${priceChange}%`
+    asset.isUp = parseFloat(priceChange) >= 0
+    asset.lastUpdated = new Date().toISOString()
+    asset.aiSummary = "MOCK_INTERCEPT: Subtle shifts in public social metadata detected."
+    // Update mock odds too
+    if (asset.propBets) {
+      asset.propBets = asset.propBets.map((pb: any) => ({
+        ...pb,
+        yesOdds: `${Math.floor(Math.random() * 90 + 5)}%`,
+        noOdds: `${Math.floor(Math.random() * 90 + 5)}%`,
+        rsi: Math.floor(Math.random() * 100)
+      }))
+    }
+    await kv.set(`market:asset:${symbol}`, asset)
+
+    const logs = await kv.get('intel:logs') || []
+    const newLog = {
+      id: Date.now(),
+      time: 'JUST_NOW',
+      symbol: symbol,
+      source: 'MOCK_NODE',
+      message: `System detected metadata movement for ${symbol}. Significance: ${asset.isUp ? 'BULLISH' : 'BEARISH'}.`,
+      severity: 'LOW'
+    }
+    await kv.set('intel:logs', [newLog, ...logs].slice(0, 50))
+    
+    await calculateAndUpdateGli()
+
+    return c.json({ asset, newLog })
+  }
+
+  const prompt = `Generate a short fake tabloid news headline (max 15 words) and market update for the couple ${asset.names} (${symbol}). 
+  Also generate 10-12 relevant prop bets based on this news.
+  Finally, generate an "Insider Intel" log entry - this should be a "leaked" or "intercepted" snippet like a transcript fragment, a valet observation, or a bank leak. 
+  Return ONLY JSON: { 
+    "news": string, 
+    "priceUpdate": number, 
+    "newRsi": number, 
+    "sentiment": number,
+    "propBets": Array<{id:string, question:string, yesOdds:string, noOdds:string, rsi:number}>,
+    "intel": { "source": string, "message": string, "severity": "LOW" | "MED" | "HIGH" | "CRITICAL" }
+  }. 
+  The priceUpdate should be between -5 and 5.`
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -167,7 +392,98 @@ routeHandler('analyze-relationship', async (c) => {
         'content-type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'claude-3-5-sonnet-20240620',
+        model: 'claude-3-5-sonnet-20241022',
+        max_tokens: 1500,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    })
+
+    const data = await response.json()
+    const result = JSON.parse(data.content[0].text.match(/\{[\s\S]*\}/)[0])
+    
+    asset.price = (parseFloat(asset.price) + result.priceUpdate).toFixed(2)
+    asset.change = `${result.priceUpdate >= 0 ? '+' : ''}${result.priceUpdate.toFixed(2)}%`
+    asset.isUp = result.priceUpdate >= 0
+    asset.aiSummary = result.news
+    asset.propBets = result.propBets.map((pb: any) => ({ ...pb, volume: `$${(Math.random() * 10).toFixed(1)}M`, expiry: '30D' }))
+    asset.lastUpdated = new Date().toISOString()
+    
+    await kv.set(`market:asset:${symbol}`, asset)
+
+    // Add to global intel feed
+    const logs = await kv.get('intel:logs') || []
+    const newLog = {
+      id: Date.now(),
+      time: 'JUST_NOW',
+      symbol: symbol,
+      ...result.intel
+    }
+    await kv.set('intel:logs', [newLog, ...logs].slice(0, 50)) // Keep last 50
+    
+    await calculateAndUpdateGli()
+
+    return c.json({ asset, newLog })
+  } catch (err) {
+    return c.json({ error: 'PULSE_FAILED' }, 500)
+  }
+}, 'post')
+
+// AI Analysis Route
+routeHandler('analyze-relationship', async (c) => {
+  let body;
+  try {
+    body = await c.req.json();
+  } catch (err) {
+    return c.json({ error: 'INVALID_JSON' }, 400);
+  }
+
+  const { logs, names } = body;
+  const apiKey = Deno.env.get('ANTHROPIC_API_KEY')
+  
+  const mockResult = {
+    price: (Math.random() * 100 + 10).toFixed(2),
+    volatility: ['HIGH', 'MED', 'LOW', 'EXTREME'][Math.floor(Math.random() * 4)],
+    sentiment: Math.random(),
+    propBets: Array.from({ length: 12 }, (_, i) => ({
+      id: `prop_${i}`,
+      question: [
+        "Will they move in together?", "Will they block each other?", 
+        "Will a public argument occur?", "Will an ex-partner intervene?",
+        "Will they announce a breakup?", "Will they attend a gala?",
+        "Will they go on vacation?", "Will they delete shared photos?",
+        "Will a third party be leaked?", "Will they get engaged?",
+        "Will they start a podcast?", "Will they adopt a pet?"
+      ][i],
+      yesOdds: `${Math.floor(Math.random() * 90 + 5)}%`,
+      noOdds: `${Math.floor(Math.random() * 90 + 5)}%`,
+      rsi: Math.floor(Math.random() * 100)
+    })),
+    chart: Array.from({ length: 20 }, () => Math.random() * 100),
+    summary: "Sentiment analysis indicates a high probability of friction."
+  };
+
+  if (!apiKey || apiKey === 'your_api_key_here') return c.json(mockResult)
+
+  const prompt = `Analyze relationship between ${names}. logs: ${logs}. 
+  Return ONLY a JSON object: {
+    price: number, 
+    volatility: string, 
+    sentiment: number, 
+    propBets: Array<{id:string, question:string, yesOdds:string, noOdds:string, rsi:number}> (Generate 12 relevant prop bets),
+    chart: number[], 
+    summary: string
+  }. No conversational text.`
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'claude-3-5-sonnet-20241022',
         max_tokens: 1024,
         messages: [{ role: 'user', content: prompt }]
       })
@@ -175,30 +491,14 @@ routeHandler('analyze-relationship', async (c) => {
 
     const data = await response.json()
     const content = data.content[0].text
-    return c.json(JSON.parse(content))
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    return c.json(jsonMatch ? JSON.parse(jsonMatch[0]) : mockResult);
   } catch (err) {
-    return c.json({ error: 'LLM_CRUNCH_FAILED', details: err.message }, 500)
+    return c.json(mockResult);
   }
 }, 'post')
 
-routeHandler('private-assets', async (c) => {
-  const user = c.get('user')
-  try {
-    const assets = (await kv.getByPrefix(`user:assets:${user.id}:`)) || []
-    return c.json(assets)
-  } catch (err) {
-    return c.json([])
-  }
-})
-
-routeHandler('save-private-asset', async (c) => {
-  const user = c.get('user')
-  const asset = await c.req.json()
-  const key = `user:assets:${user.id}:${asset.symbol}`
-  await kv.set(key, asset)
-  return c.json({ success: true })
-}, 'post')
-
+// Social Routes
 routeHandler('search-users', async (c) => {
   const query = c.req.query('q')?.toLowerCase()
   if (!query) return c.json([])
@@ -233,6 +533,35 @@ routeHandler('add-friend', async (c) => {
     await kv.set(`user:friends:${user.id}`, friends)
   }
   return c.json({ success: true })
+}, 'post')
+
+routeHandler('seed-test-users', async (c) => {
+  const testUsers = [
+    { name: 'Chad Harrison', email: 'chad@finance.com', bio: 'High Frequency Trader. Low Frequency Dater.' },
+    { name: 'Brittany Vanes', email: 'britt@vibe.io', bio: 'Influencer. 14 open lawsuits. 2 divorces.' },
+    { name: 'Devon Miller', email: 'devon@alpha.tech', bio: 'Technical Founder. Scaling relationships like microservices.' },
+    { name: 'Sasha Sterling', email: 'sasha@pr.com', bio: 'PR Crisis Manager. I bury scandals for a living.' },
+    { name: 'Jaxon Rivers', email: 'jaxon@gym.fit', bio: 'Elite Coach. Your relationship is my cardio.' },
+    { name: 'Elena Rossi', email: 'elena@art.gallery', bio: 'Art Curator. Investing in high-net-worth drama.' },
+    { name: 'Marcus Thorne', email: 'marcus@law.corp', bio: 'Divorce Attorney. I see the liquidation coming before you do.' },
+    { name: 'Tiff Chen', email: 'tiff@web3.xyz', bio: 'DeFi Degen. Hedging my heart with leverage.' },
+    { name: 'Leo Moretti', email: 'leo@lux.com', bio: 'Hospitality Mogul. I know which rooms are being booked.' },
+    { name: 'Zoe Wilder', email: 'zoe@green.org', bio: 'Sustainability Expert. Recycling exes for maximum ROI.' }
+  ]
+
+  for (let i = 0; i < testUsers.length; i++) {
+    const u = testUsers[i];
+    const id = `test_node_${i + 1}`;
+    const profile = {
+      id, name: u.name, email: u.email, 
+      avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${u.name.replace(' ', '')}`,
+      joined: new Date().toISOString(), balance: 50000, portfolio: [], onboarded: true, bio: u.bio
+    };
+    await kv.set(`user:profile:${id}`, profile);
+    await kv.set(`user:search:email:${u.email.toLowerCase()}`, { id, name: u.name });
+    await kv.set(`user:search:name:${u.name.toLowerCase()}`, { id, name: u.name });
+  }
+  return c.json({ success: true, count: testUsers.length });
 }, 'post')
 
 Deno.serve(app.fetch)

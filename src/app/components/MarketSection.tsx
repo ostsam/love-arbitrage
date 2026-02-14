@@ -4,14 +4,15 @@ import { MarketCard } from './MarketCard';
 import { Search, Filter, TrendingUp, TrendingDown, ArrowUpDown } from 'lucide-react';
 
 interface MarketSectionProps {
+  assets: any[];
   onSelectAsset: (asset: any) => void;
   searchQuery: string;
 }
 
-export const MarketSection: React.FC<MarketSectionProps> = ({ onSelectAsset, searchQuery }) => {
+export const MarketSection: React.FC<MarketSectionProps> = ({ assets, onSelectAsset, searchQuery }) => {
   const [filter, setFilter] = React.useState('ALL');
   
-  const filteredAssets = ALL_ASSETS.filter(asset => {
+  const filteredAssets = assets.filter(asset => {
     const matchesSearch = asset.symbol.toLowerCase().includes(searchQuery.toLowerCase()) || 
                          asset.names.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesFilter = filter === 'ALL' || asset.category.toUpperCase() === filter;
@@ -45,9 +46,9 @@ export const MarketSection: React.FC<MarketSectionProps> = ({ onSelectAsset, sea
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
         {filteredAssets.length > 0 ? (
-          filteredAssets.map(asset => (
+          filteredAssets.map((asset, index) => (
             <MarketCard 
-              key={asset.symbol} 
+              key={`${asset.symbol}-${index}`} 
               {...asset} 
               hasProps={!!asset.propBets?.length}
               onClick={() => onSelectAsset(asset)} 

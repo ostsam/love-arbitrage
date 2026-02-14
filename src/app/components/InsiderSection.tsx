@@ -1,18 +1,34 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Database, Zap, ShieldAlert, Terminal, MessageSquare, Radio, Eye } from 'lucide-react';
+import { apiFetch } from '../utils/api';
 
 import { ImageWithFallback } from './figma/ImageWithFallback';
 
-const INSIDER_LOGS = [
-  { id: 1, source: 'WIRETAP_BETA', symbol: '$TAY-TRAV', message: "Low-frequency argument detected in private suite. Keyword: 'pre-nup'.", time: '2m ago', severity: 'HIGH' },
-  { id: 2, source: 'PABLO_GOSSIP', symbol: '$BEN-JEN', message: "Affleck seen moving boxes out of West Hollywood estate. 42% confidence.", time: '14m ago', severity: 'CRITICAL' },
-  { id: 3, source: 'SAT_INTEL', symbol: '$TOM-ZEND', message: "Zendaya's stylist unfollowed Holland on private Alt. Bearish signal.", time: '45m ago', severity: 'MED' },
-  { id: 4, source: 'BANK_LEAK', symbol: '$KIM-K', message: "Transfer of $2M to anonymous high-end divorce lawyer identified.", time: '1h ago', severity: 'CRITICAL' },
-  { id: 5, source: 'ROOM_SERVICE', symbol: '$RIRI-ASAP', message: "Loud crashing sounds reported in penthouse. Staff forced to sign NDAs.", time: '3h ago', severity: 'HIGH' },
-  { id: 6, source: 'VALET_LOGS', symbol: '$KYLIE-TIM', message: "Chalamet's car hasn't moved from Kylie's driveway in 48 hours. Long signal.", time: '5h ago', severity: 'LOW' },
-];
+export const InsiderSection: React.FC<{ accessToken: string }> = ({ accessToken }) => {
+  const [logs, setLogs] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
-export const InsiderSection: React.FC = () => {
+  useEffect(() => {
+    fetchIntel();
+    const interval = setInterval(fetchIntel, 30000); // Refresh every 30 seconds as requested
+    return () => clearInterval(interval);
+  }, [accessToken]);
+
+  const fetchIntel = async () => {
+    setIsLoading(true);
+    try {
+      const response = await apiFetch('/get-intel', {}, accessToken);
+      const data = await response.json();
+      if (data.logs) {
+        setLogs(data.logs);
+      }
+    } catch (err) {
+      console.error('Failed to fetch intel');
+    } finally {
+      setTimeout(() => setIsLoading(false), 1000); // Artificial delay for terminal feel
+    }
+  };
+
   return (
     <div className="flex-1 flex flex-col bg-[#050505] overflow-hidden">
       {/* Header */}
@@ -25,7 +41,7 @@ export const InsiderSection: React.FC = () => {
         </div>
         <div className="flex gap-2">
           <div className="flex items-center gap-2 bg-[#1e222d] border border-[#2a2e3a] px-3 py-1">
-            <Radio size={12} className="text-[#ff2e51] animate-pulse" />
+            <Radio size={12} className={`text-[#ff2e51] ${isLoading ? '' : 'animate-pulse'}`} />
             <span className="font-['Space_Mono'] text-[9px] font-bold">LIVE_INTERCEPT</span>
           </div>
         </div>
@@ -34,12 +50,17 @@ export const InsiderSection: React.FC = () => {
       <div className="flex-1 flex overflow-hidden">
         {/* Main Feed */}
         <div className="flex-1 overflow-y-auto p-4 space-y-2 font-['Space_Mono'] text-xs">
-          {INSIDER_LOGS.map((log) => (
+          {logs.length === 0 && !isLoading && (
+            <div className="text-[#717182] text-[10px] animate-pulse p-4 text-center border border-dashed border-[#2a2e3a]">
+              WAITING FOR ENCRYPTED PACKETS...
+            </div>
+          )}
+          {logs.map((log) => (
             <div key={log.id} className="group border border-[#2a2e3a] hover:border-[#00f090] bg-[#0a0b0d] p-3 transition-all relative">
               <div className="flex justify-between items-start mb-2">
                 <div className="flex items-center gap-3">
                   <span className="text-[10px] text-[#717182] font-bold">[{log.time}]</span>
-                  <span className="text-[10px] bg-[#1e222d] px-2 py-0.5 border border-[#2a2e3a] text-[#00f090]">{log.source}</span>
+                  <span className="text-[10px] bg-[#1e222d] px-2 py-0.5 border border-[#2a2e3a] text-[#00f090] uppercase">{log.source}</span>
                   <span className="font-bold text-[#00f090] underline cursor-pointer">{log.symbol}</span>
                 </div>
                 <div className={`px-2 py-0.5 text-[9px] font-bold ${

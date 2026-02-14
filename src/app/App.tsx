@@ -44,22 +44,26 @@ import { projectId, publicAnonKey } from '/utils/supabase/info';
 import { apiFetch } from './utils/api';
 
 const Dashboard = ({ 
+  assets,
+  accessToken,
   onSelectAsset, 
   onUpload,
   onPropTrade
 }: { 
+  assets: any[],
+  accessToken: string,
   onSelectAsset: (asset: any) => void, 
   onUpload: () => void,
   onPropTrade: (symbol: string, side: 'YES' | 'NO', betId: string) => void
 }) => {
-  const publicMarket = ALL_ASSETS.filter(a => a.category === 'Public').slice(0, 4);
-  const privateEquity = ALL_ASSETS.filter(a => a.category === 'Private').slice(0, 2);
-  const trendingProps = ALL_ASSETS.flatMap(a => (a.propBets || []).map(b => ({ ...b, symbol: a.symbol }))).slice(0, 3);
+  const publicMarket = assets.filter(a => a.category === 'Public').slice(0, 4);
+  const privateEquity = assets.filter(a => a.category === 'Private').slice(0, 2);
+  const trendingProps = assets.flatMap(a => (a.propBets || []).map(b => ({ ...b, symbol: a.symbol }))).slice(0, 3);
 
   return (
     <div className="flex-1 overflow-y-auto bg-[#0a0b0d]">
       <div className="p-4 space-y-4">
-        <GlobalIndexChart />
+        <GlobalIndexChart accessToken={accessToken} assets={assets} />
         
         {/* Trending Prop Markets (Kalshi style) */}
         <section className="space-y-3">
@@ -123,9 +127,9 @@ const Dashboard = ({
               <span className="font-['Space_Mono'] text-[9px] text-[#717182]">VOL: 1.4B</span>
             </div>
             <div className="space-y-2">
-              {publicMarket.map((asset) => (
+              {publicMarket.map((asset, index) => (
                 <MarketCard 
-                  key={asset.symbol} 
+                  key={`${asset.symbol}-${index}`} 
                   {...asset} 
                   hasProps={!!asset.propBets?.length}
                   onClick={() => onSelectAsset(asset)} 
@@ -143,9 +147,9 @@ const Dashboard = ({
               <span className="font-['Space_Mono'] text-[9px] text-[#717182]">RISK: CRITICAL</span>
             </div>
             <div className="space-y-2">
-              {privateEquity.map((asset) => (
+              {privateEquity.map((asset, index) => (
                 <MarketCard 
-                  key={asset.symbol} 
+                  key={`${asset.symbol}-${index}`} 
                   {...asset} 
                   hasProps={!!asset.propBets?.length}
                   onClick={() => onSelectAsset(asset)} 
@@ -182,6 +186,8 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isFriendsModalOpen, setIsFriendsModalOpen] = useState(false);
+  const [liveAssets, setLiveAssets] = useState<any[]>([]);
+  const [isLoadingMarkets, setIsLoadingMarkets] = useState(true);
   
   const [modalState, setModalState] = useState<{
     isOpen: boolean;
@@ -198,16 +204,81 @@ export default function App() {
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
-      if (session) fetchProfile(session.access_token);
+      if (session) {
+        fetchProfile(session.access_token);
+        fetchMarkets(session.access_token);
+      }
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
-      if (session) fetchProfile(session.access_token);
+      if (session) {
+        fetchProfile(session.access_token);
+        fetchMarkets(session.access_token);
+      }
     });
 
     return () => subscription.unsubscribe();
   }, []);
+
+  const fetchMarkets = async (token: string) => {
+    setIsLoadingMarkets(true);
+    try {
+      const response = await apiFetch('/get-markets', {}, token);
+      const data = await response.json();
+      
+      if (data.needsSeeding) {
+        await apiFetch('/seed-global-markets', {
+          method: 'POST',
+          body: JSON.stringify({ defaultAssets: ALL_ASSETS })
+        }, token);
+        const retry = await apiFetch('/get-markets', {}, token);
+        const retryData = await retry.json();
+        setLiveAssets(retryData.assets || []);
+      } else {
+        setLiveAssets(data.assets || []);
+      }
+    } catch (err) {
+      console.error('Market fetch failed:', err);
+      setLiveAssets(ALL_ASSETS);
+    } finally {
+      setIsLoadingMarkets(false);
+    }
+  };
+
+  // Pulse refresh effect
+  useEffect(() => {
+    if (!session || liveAssets.length === 0) return;
+    
+    const interval = setInterval(async () => {
+      const celebs = liveAssets.filter(a => a.category === 'Public');
+      if (celebs.length === 0) return;
+      
+      const randomCeleb = celebs[Math.floor(Math.random() * celebs.length)];
+      try {
+        const response = await apiFetch('/refresh-market-pulse', {
+          method: 'POST',
+          body: JSON.stringify({ symbol: randomCeleb.symbol })
+        }, session.access_token);
+        
+        const data = await response.json();
+        const updatedAsset = data.asset || data; // Handle both old and new formats
+        
+        if (updatedAsset.symbol) {
+          setLiveAssets(prev => prev.map(a => a.symbol === updatedAsset.symbol ? updatedAsset : a));
+          
+          toast.info(`NEWS_UPDATE: ${updatedAsset.symbol}`, {
+            description: updatedAsset.aiSummary,
+            icon: <MessageSquare size={14} className="text-[#00f090]" />
+          });
+        }
+      } catch (err) {
+        console.error('Pulse refresh failed');
+      }
+    }, 30000); // Every 30 seconds update one random celeb for high-frequency feel
+
+    return () => clearInterval(interval);
+  }, [session, liveAssets.length]);
 
   const fetchProfile = async (token: string) => {
     try {
@@ -295,12 +366,77 @@ export default function App() {
     }
   };
 
-  const confirmTrade = (amount: number) => {
-    toast.success(`Position confirmed: ${modalState.betType} $${amount}`, {
-      description: `Target: ${modalState.asset?.symbol} @ ${modalState.asset?.price}`,
-      icon: <Zap size={14} className="text-[#00f090]" />
-    });
-    setModalState(prev => ({ ...prev, isOpen: false }));
+  const confirmTrade = async (amount: number) => {
+    try {
+      const response = await apiFetch('/place-bet', {
+        method: 'POST',
+        body: JSON.stringify({
+          asset: modalState.asset,
+          betType: modalState.betType,
+          amount,
+          question: modalState.question,
+          odds: modalState.odds
+        })
+      }, session.access_token);
+
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'TRADE_FAILED');
+
+      setUserProfile(result.profile);
+      
+      toast.success(`Position confirmed: ${modalState.betType} $${amount}`, {
+        description: `Target: ${modalState.asset?.symbol} @ ${modalState.asset?.price}`,
+        icon: <TrendingUp size={14} className="text-[#00f090]" />
+      });
+      setModalState(prev => ({ ...prev, isOpen: false }));
+    } catch (err: any) {
+      toast.error(`ORDER_REJECTED: ${err.message}`);
+    }
+  };
+
+  const handleDeposit = async (amount: number) => {
+    try {
+      const response = await apiFetch('/deposit', {
+        method: 'POST',
+        body: JSON.stringify({ amount })
+      }, session.access_token);
+      
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'DEPOSIT_FAILED');
+      
+      setUserProfile((prev: any) => ({ ...prev, balance: result.balance }));
+      toast.success('LIQUIDITY_INFUSION_SUCCESSFUL', {
+        description: `$${amount.toLocaleString()} credited to terminal balance.`,
+        icon: <Database size={14} className="text-[#00f090]" />
+      });
+    } catch (err: any) {
+      toast.error(`DEPOSIT_ERROR: ${err.message}`);
+    }
+  };
+
+  const handleSellBet = async (betId: string) => {
+    try {
+      const response = await apiFetch('/sell-bet', {
+        method: 'POST',
+        body: JSON.stringify({ betId })
+      }, session.access_token);
+      
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'LIQUIDATION_FAILED');
+      
+      setUserProfile((prev: any) => ({ 
+        ...prev, 
+        balance: result.balance, 
+        portfolio: result.portfolio 
+      }));
+      
+      toast.success('POSITION_LIQUIDATED', {
+        description: `Assets converted to terminal liquidity.`,
+        icon: <TrendingUp size={14} className="text-[#00f090]" />
+      });
+    } catch (err: any) {
+      toast.error(`LIQUIDATION_ERROR: ${err.message}`);
+    }
   };
 
   if (!session) {
@@ -329,10 +465,15 @@ export default function App() {
   }
 
   const renderContent = () => {
-    if (selectedAsset) {
+    // Sync selected asset with live data if it exists
+    const currentAsset = selectedAsset 
+      ? liveAssets.find(a => a.symbol === selectedAsset.symbol) || selectedAsset 
+      : null;
+
+    if (currentAsset) {
       return (
         <AssetDetailView 
-          asset={selectedAsset} 
+          asset={currentAsset} 
           onBack={() => setSelectedAsset(null)} 
           onBet={handlePlaceBet}
         />
@@ -343,28 +484,49 @@ export default function App() {
       case 'dashboard':
         return (
           <Dashboard 
+            assets={liveAssets}
+            accessToken={session.access_token}
             onSelectAsset={setSelectedAsset} 
             onUpload={() => setCurrentTab('private')} 
             onPropTrade={handleGlobalPropTrade}
           />
         );
       case 'market':
-        return <MarketSection onSelectAsset={setSelectedAsset} searchQuery={searchQuery} />;
+        return <MarketSection assets={liveAssets} onSelectAsset={setSelectedAsset} searchQuery={searchQuery} />;
       case 'private':
         return (
           <PrivateEquitySection 
+            assets={liveAssets}
             accessToken={session.access_token} 
             projectId={projectId} 
             onSelectAsset={setSelectedAsset}
+            onRefreshMarkets={() => fetchMarkets(session.access_token)}
           />
         );
       case 'insider':
-        return <InsiderSection />;
+        return <InsiderSection accessToken={session.access_token} />;
       case 'leaderboard':
         return <LeaderboardSection />;
       case 'profile':
+        return (
+          <ProfileSection 
+            profile={userProfile} 
+            accessToken={session.access_token} 
+            onDeposit={handleDeposit} 
+            onSell={handleSellBet}
+            viewMode="profile"
+          />
+        );
       case 'portfolio':
-        return <ProfileSection profile={userProfile} accessToken={session.access_token} />;
+        return (
+          <ProfileSection 
+            profile={userProfile} 
+            accessToken={session.access_token} 
+            onDeposit={handleDeposit} 
+            onSell={handleSellBet}
+            viewMode="portfolio"
+          />
+        );
       default:
         return (
           <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-[#0a0b0d]">
@@ -392,7 +554,7 @@ export default function App() {
       
       {/* Top Navigation */}
       <header className="border-b border-[#2a2e3a] bg-[#0a0b0d] z-30 shrink-0">
-        <Ticker />
+        <Ticker assets={liveAssets} />
         <div className="px-4 py-3 flex justify-between items-center h-16">
           <div className="flex items-center gap-4">
             <button 
@@ -513,6 +675,7 @@ export default function App() {
           betType={modalState.betType}
           question={modalState.question}
           odds={modalState.odds}
+          balance={userProfile?.balance || 0}
           onConfirm={confirmTrade}
         />
       )}

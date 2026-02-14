@@ -179,6 +179,15 @@ export const AssetDetailView: React.FC<AssetDetailViewProps> = ({ asset, onBack,
                             <span className="text-[8px] text-[#717182] flex items-center gap-1 uppercase tracking-tighter">
                               <Clock size={10} /> {bet.expiry}
                             </span>
+                            {(bet as any).rsi !== undefined && (
+                              <span className={`text-[8px] font-black px-1.5 py-0.5 border ${
+                                (bet as any).rsi > 70 ? 'border-[#ff2e51] text-[#ff2e51]' : 
+                                (bet as any).rsi < 30 ? 'border-[#00f090] text-[#00f090]' : 
+                                'border-[#717182] text-[#717182]'
+                              }`}>
+                                RSI: {(bet as any).rsi}
+                              </span>
+                            )}
                           </div>
                           <div className="group/info relative cursor-help">
                             <Info size={12} className="text-[#717182] hover:text-ghost-white" />

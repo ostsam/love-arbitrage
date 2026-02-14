@@ -1,27 +1,27 @@
 import React from 'react';
 
-const TICKER_DATA = [
-  { symbol: '$TAY-TRAV', price: '+2.4%', up: true },
-  { symbol: '$BEN-JEN', price: '-15.2%', up: false },
-  { symbol: '$KIM-K', price: '-0.1%', up: false },
-  { symbol: '$TOM-ZEND', price: '+8.9%', up: true },
-  { symbol: '$BIEBER-H', price: '-4.3%', up: false },
-  { symbol: '$RIRI-ASAP', price: '+1.2%', up: true },
-  { symbol: '$KYLIE-TIM', price: '+12.5%', up: true },
-  { symbol: '$PEWDS-MAR', price: '+0.5%', up: true },
-];
+interface TickerProps {
+  assets?: any[];
+}
 
-export const Ticker: React.FC = () => {
+export const Ticker: React.FC<TickerProps> = ({ assets = [] }) => {
+  const displayAssets = assets.length > 0 ? assets : [
+    { symbol: '$TAY-TRAV', change: '+2.4%', isUp: true },
+    { symbol: '$BEN-JEN', change: '-15.2%', isUp: false },
+    { symbol: '$KIM-K', change: '-0.1%', isUp: false },
+    { symbol: '$TOM-ZEND', change: '+8.9%', isUp: true },
+  ];
+
   return (
     <div className="w-full bg-black border-b border-[#2a2e3a] overflow-hidden py-1 select-none">
-      <div className="flex animate-[marquee_30s_linear_infinite] whitespace-nowrap">
-        {[...TICKER_DATA, ...TICKER_DATA].map((item, idx) => (
-          <div key={idx} className="flex items-center mx-8 space-x-2">
+      <div className="flex animate-[marquee_40s_linear_infinite] whitespace-nowrap">
+        {[...displayAssets, ...displayAssets].map((item, idx) => (
+          <div key={idx} className="flex items-center mx-10 space-x-2">
             <span className="font-['Space_Mono'] font-bold text-ghost-white tracking-tighter">
               {item.symbol}
             </span>
-            <span className={`font-['Space_Mono'] ${item.up ? 'text-[#00f090]' : 'text-[#ff2e51]'}`}>
-              {item.price}
+            <span className={`font-['Space_Mono'] ${item.isUp ? 'text-[#00f090]' : 'text-[#ff2e51]'}`}>
+              {item.change || '0.00%'}
             </span>
           </div>
         ))}
