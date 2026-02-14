@@ -1,7 +1,7 @@
-import { Hono } from 'jsr:@hono/hono'
-import { cors } from 'jsr:@hono/hono/cors'
-import { logger } from 'jsr:@hono/hono/logger'
-import { createClient } from 'jsr:@supabase/supabase-js@2.49.8'
+import { Hono } from 'npm:hono'
+import { cors } from 'npm:hono/cors'
+import { logger } from 'npm:hono/logger'
+import { createClient } from 'npm:@supabase/supabase-js'
 import * as kv from './kv_store.tsx'
 
 declare const Deno: {
