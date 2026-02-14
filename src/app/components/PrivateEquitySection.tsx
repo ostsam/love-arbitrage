@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { 
   Search, 
   Users, 
-  Mic, 
+  Terminal as TerminalIcon, 
   Zap, 
   TrendingUp, 
   TrendingDown, 
@@ -17,7 +17,8 @@ import {
   Cpu,
   Lock,
   Terminal,
-  Loader2
+  Loader2,
+  FileAudio
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { MarketCard } from './MarketCard';
@@ -249,12 +250,12 @@ export const PrivateEquitySection: React.FC<PrivateEquitySectionProps> = ({
               {selectedUser && (
                 <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
                   <div className="flex items-center gap-2 border-b border-[#2a2e3a] pb-2">
-                    <Mic size={16} className="text-[#ff2e51]" />
+                    <FileAudio size={16} className="text-[#ff2e51]" />
                     <h3 className="text-[11px] font-black uppercase text-ghost-white">Step 2: Initialize Wiretap</h3>
                   </div>
                   <div className="flex gap-2">
                     <label className="flex-1 flex items-center justify-center gap-2 py-3 bg-[#1e222d] border border-[#2a2e3a] text-[10px] font-black text-white hover:text-[#00ff41] hover:border-[#00ff41]/30 cursor-pointer transition-all uppercase">
-                      {isUploading ? <Loader2 size={14} className="animate-spin text-[#00ff41]" /> : <Mic size={14} />}
+                      {isUploading ? <Loader2 size={14} className="animate-spin text-[#00ff41]" /> : <FileAudio size={14} />}
                       {isUploading ? 'TRANSCRIBING...' : 'UPLOAD_AUDIO_INTERCEPT'}
                       <input type="file" accept="audio/*" className="hidden" onChange={handleFileUpload} disabled={isUploading} />
                     </label>

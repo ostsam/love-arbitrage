@@ -21,7 +21,6 @@ import { ImageWithFallback } from './components/figma/ImageWithFallback';
 import { OrderEntryModal } from './components/OrderEntryModal';
 import { 
   TrendingDown, 
-  Mic, 
   Search, 
   Bell, 
   Menu, 
@@ -695,18 +694,6 @@ export default function App() {
           <span className="hidden sm:inline">© 2026 LOVE ARBITRAGE</span>
         </div>
       </footer>
-
-      {/* Upload FAB */}
-      {currentTab === 'dashboard' && !selectedAsset && (
-        <button 
-          onClick={handleUpload}
-          className="fixed bottom-10 right-6 w-16 h-16 bg-[#00f090] hover:scale-110 transition-transform active:scale-95 flex flex-col items-center justify-center group shadow-[0_0_20px_rgba(0,240,144,0.3)] z-40"
-        >
-          <Mic size={24} className="text-[#0a0b0d]" />
-          <span className="text-[8px] font-bold text-[#0a0b0d] mt-1">WIRETAP</span>
-          <div className="absolute top-0 left-0 w-full h-1 bg-[#0a0b0d]/20 animate-[scan_2s_infinite]"></div>
-        </button>
-      )}
 
       <style>{`
         @keyframes scan {

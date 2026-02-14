@@ -6,7 +6,10 @@ import * as kv from './kv_store.tsx'
 
 const app = new Hono()
 
-// Enhanced logging
+// Diagnostic root route
+app.get('/', (c) => c.json({ status: 'TERMINAL_ONLINE', version: '2.0.4' }))
+
+// Middleware
 app.use('*', logger(console.log))
 app.use('*', cors())
 
@@ -19,12 +22,36 @@ app.onError((err, c) => {
 const getSupabase = () => {
   const url = Deno.env.get('SUPABASE_URL') || ''
   const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('SUPABASE_ANON_KEY') || ''
+  return createClient(url, key)
+}
+
+// Market Data Utility (defined early)
+const calculateAndUpdateGli = async () => {
+  let assets = await kv.getByPrefix('market:asset:')
+  let scaledValue = 3500;
   
-  if (!url || !key) {
-    console.error('SUPABASE_CONFIG_MISSING: URL or Key is not set in environment.')
+  if (assets && assets.length > 0) {
+    const totalValue = assets.reduce((sum: number, a: any) => sum + parseFloat(a.price || 0), 0)
+    const averageValue = totalValue / assets.length
+    scaledValue = parseFloat((averageValue * 75).toFixed(2))
   }
   
-  return createClient(url, key)
+  let history = await kv.get('market:gli:history') || []
+  if (history.length === 0) {
+    history = Array.from({ length: 48 }, (_, i) => ({
+      time: `${Math.floor(i/2).toString().padStart(2, '0')}:${(i%2)*30 || '00'}`,
+      value: parseFloat((scaledValue - 100 + (i/48)*100 + (Math.random()-0.5)*20).toFixed(2)),
+      timestamp: Date.now() - (50 - i) * 1800000
+    }))
+  }
+
+  const newEntry = {
+    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    value: scaledValue,
+    timestamp: Date.now()
+  }
+  
+  await kv.set('market:gli:history', [...history, newEntry].slice(-100))
 }
 
 // Helper to handle BOTH prefixed and non-prefixed routes
@@ -199,26 +226,14 @@ routeHandler('sell-bet', async (c) => {
 }, 'post')
 
 // Market Data Routes (GLOBAL REALTIME)
-const calculateAndUpdateGli = async () => {
-  const assets = await kv.getByPrefix('market:asset:')
-  if (!assets || assets.length === 0) return
+routeHandler('get-gli-history', async (c) => {
+  let history = await kv.get('market:gli:history') || []
   
-  const totalValue = assets.reduce((sum: number, a: any) => sum + parseFloat(a.price || 0), 0)
-  const averageValue = totalValue / assets.length
-  
-  const history = await kv.get('market:gli:history') || []
-  const newEntry = {
-    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    value: parseFloat(averageValue.toFixed(2)),
-    timestamp: Date.now()
+  if (history.length === 0) {
+    await calculateAndUpdateGli()
+    history = await kv.get('market:gli:history') || []
   }
   
-  // Keep last 100 points
-  await kv.set('market:gli:history', [...history, newEntry].slice(-100))
-}
-
-routeHandler('get-gli-history', async (c) => {
-  const history = await kv.get('market:gli:history') || []
   return c.json({ history })
 })
 
@@ -563,5 +578,194 @@ routeHandler('seed-test-users', async (c) => {
   }
   return c.json({ success: true, count: testUsers.length });
 }, 'post')
+
+// DEBUG: Catch-all for routing diagnostics
+app.use('*', async (c, next) => {
+  console.log(`[ROUTING_DIAGNOSTIC] ${c.req.method} ${c.req.url}`)
+  await next()
+})
+
+routeHandler('ping', (c) => c.json({ status: 'PONG', timestamp: new Date().toISOString() }), 'get', false)
+
+// Test GET for webhook to verify routing
+routeHandler('telegram-webhook', (c) => c.json({ 
+  status: 'WEBHOOK_ENDPOINT_ONLINE', 
+  guidance: 'SEND_POST_REQUEST_WITH_VOICE_DATA' 
+}), 'get', false)
+
+// WIRE TAP SYSTEM: Telegram + Deepgram
+routeHandler('telegram-webhook', async (c) => {
+  console.log('TELEGRAM_WEBHOOK_RECEIVED: INCOMING_PACKET')
+  
+  // Log headers to see if it's actually Telegram
+  const headers = {}
+  c.req.header().forEach((v, k) => headers[k] = v)
+  console.log('REQUEST_HEADERS:', JSON.stringify(headers, null, 2))
+
+  let body;
+  try {
+    body = await c.req.json()
+    console.log('WEBHOOK_BODY:', JSON.stringify(body, null, 2))
+  } catch (e) {
+    console.error('FAILED_TO_PARSE_JSON_BODY:', e)
+    return c.json({ status: 'error', message: 'invalid_json' }, 400)
+  }
+
+  const token = Deno.env.get('TELEGRAM_BOT_TOKEN')
+  const deepgramKey = Deno.env.get('DEEPGRAM_API_KEY')
+
+  if (!token) console.error('MISSING_SECRET: TELEGRAM_BOT_TOKEN')
+  if (!deepgramKey) console.error('MISSING_SECRET: DEEPGRAM_API_KEY')
+
+  if (!body.message) {
+    console.log('WEBHOOK_IGNORED: NO_MESSAGE_OBJECT')
+    return c.json({ status: 'ignored' })
+  }
+
+  const chatId = body.message.chat.id
+
+  // Auto-reply for text messages
+  if (body.message.text && token) {
+    console.log('REPLYING_TO_TEXT_MESSAGE...')
+    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: "NODE_ACTIVE: Standard text signal received. However, target extraction requires VOICE_DATA intercepts for sentiment diarization. Please upload audio."
+      })
+    })
+    return c.json({ status: 'ok' })
+  }
+
+  if (!body.message.voice) {
+    console.log('WEBHOOK_IGNORED: MESSAGE_TYPE_IS_NOT_VOICE')
+    return c.json({ status: 'ignored' })
+  }
+
+  // Auto-reply "Thanks" for audio immediately to confirm reception
+  if (token) {
+    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: "SIGNAL_LOCKED: Audio packet received. Commencing Deepgram diarization and target analysis..."
+      })
+    })
+  }
+
+  const voice = body.message.voice
+  console.log(`PROCESSING_VOICE_FILE: ID=${voice.file_id}, CHAT_ID=${chatId}`)
+
+  try {
+    // 1. Get file path from Telegram
+    console.log('FETCHING_FILE_METADATA_FROM_TELEGRAM...')
+    const fileResp = await fetch(`https://api.telegram.org/bot${token}/getFile?file_id=${voice.file_id}`)
+    const fileData = await fileResp.json()
+    
+    if (!fileData.ok) {
+      console.error('TELEGRAM_API_ERROR:', fileData)
+      throw new Error(`Telegram error: ${fileData.description}`)
+    }
+
+    const filePath = fileData.result.file_path
+    const audioUrl = `https://api.telegram.org/file/bot${token}/${filePath}`
+    console.log('AUDIO_URL_RESOLVED:', audioUrl)
+
+    // 2. Send to Deepgram for analysis
+    console.log('INITIATING_DEEPGRAM_SENTIMENT_ANALYSIS...')
+    const dgParams = new URLSearchParams({
+      model: 'nova-2',
+      diarize: 'true',
+      sentiment: 'true',
+      intents: 'true',
+      punctuate: 'true',
+      filler_words: 'true'
+    })
+
+    const dgResp = await fetch(`https://api.deepgram.com/v1/listen?${dgParams.toString()}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Token ${deepgramKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ url: audioUrl })
+    })
+
+    const dgResult = await dgResp.json()
+    console.log('DEEPGRAM_RAW_RESPONSE:', JSON.stringify(dgResult, null, 2))
+
+    const transcript = dgResult.results?.channels[0]?.alternatives[0]?.transcript || "No transcript"
+    console.log('TRANSCRIPTION_SUCCESS:', transcript)
+
+    const isConflict = transcript.toLowerCase().includes('stop') || 
+                       transcript.toLowerCase().includes('why') || 
+                       transcript.toLowerCase().includes('never') ||
+                       transcript.toLowerCase().includes('over') ||
+                       transcript.toLowerCase().includes('hate') ||
+                       transcript.toLowerCase().includes('done')
+
+    console.log(`CONFLICT_DETECTION: ${isConflict ? 'CRITICAL_FRICTION_DETECTED' : 'NOMINAL_ATMOSPHERE'}`)
+
+    // 3. Update $MIKE-REB Market Data
+    console.log('UPDATING_MARKET_ASSET: $MIKE-REB')
+    const asset = await kv.get('market:asset:$MIKE-REB')
+    if (asset) {
+      const oldPrice = asset.price
+      asset.price = (parseFloat(asset.price) * (isConflict ? 0.3 : 0.8)).toFixed(2)
+      asset.change = isConflict ? "-72.1%" : "-15.4%"
+      asset.isUp = false
+      asset.aiSummary = `WIRETAP_CONFIRMED: ${isConflict ? 'CRITICAL_FRICTION' : 'SUBTLE_TENSION'} detected. Transcript analysis confirms interpersonal volatility.`
+      
+      if (asset.propBets) {
+        asset.propBets = asset.propBets.map((pb: any) => {
+          if (pb.question.toLowerCase().includes('split') || 
+              pb.question.toLowerCase().includes('break') || 
+              pb.question.toLowerCase().includes('office')) {
+            return { ...pb, yesOdds: '94%', noOdds: '6%', rsi: 99 }
+          }
+          return pb
+        })
+      }
+      
+      await kv.set('market:asset:$MIKE-REB', asset)
+      console.log(`ASSET_UPDATE_COMMITTED: ${oldPrice} -> ${asset.price}`)
+      
+      const logs = await kv.get('intel:logs') || []
+      const newLog = {
+        id: Date.now(),
+        time: 'JUST_NOW',
+        symbol: '$MIKE-REB',
+        source: 'TELEGRAM_WIRETAP',
+        message: `Audio intercept analyzed: "${transcript.slice(0, 60)}...". Vibe: ${isConflict ? 'HOSTILE' : 'COLD'}.`,
+        severity: isConflict ? 'CRITICAL' : 'HIGH'
+      }
+      await kv.set('intel:logs', [newLog, ...logs].slice(0, 50))
+      console.log('INTEL_LOG_INJECTED:', newLog.message)
+      
+      await calculateAndUpdateGli()
+      console.log('GLI_RECALCULATION_COMPLETE')
+    } else {
+      console.error('ASSET_NOT_FOUND: $MIKE-REB (Make sure it is seeded!)')
+    }
+
+    // 4. Reply to user in Telegram
+    console.log('SENDING_TELEGRAM_CONFIRMATION_TO_OPERATOR...')
+    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: `NODE_SIGNAL_RECEIVED: Intercept processed.\n\nTARGET: $MIKE-REB\nSTATUS: LIQUIDATION_MODE\nSENTIMENT: ${isConflict ? 'HOSTILE' : 'TENSE'}\n\n"Analysis uploaded to Love Arbitrage Terminal."`
+      })
+    })
+
+  } catch (err) {
+    console.error('WIRETAP_CRITICAL_FAILURE:', err)
+  }
+
+  return c.json({ status: 'ok' })
+}, 'post', false)
 
 Deno.serve(app.fetch)

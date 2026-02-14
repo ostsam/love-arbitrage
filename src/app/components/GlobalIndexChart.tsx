@@ -83,10 +83,13 @@ export const GlobalIndexChart: React.FC<{ accessToken: string, assets: any[] }> 
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={history.length > 0 ? history : [{time: '0', value: 0}]}>
+            <AreaChart data={history.length > 1 ? history : (history.length === 1 ? [
+              { time: 'PREV', value: history[0].value * 0.98 },
+              history[0]
+            ] : [{time: '0', value: 0}])}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#1e222d" />
               <XAxis hide dataKey="time" />
-              <YAxis hide domain={['dataMin - 10', 'dataMax + 10']} />
+              <YAxis hide domain={['dataMin - 50', 'dataMax + 50']} />
               <Tooltip
                 contentStyle={{ backgroundColor: '#0a0b0d', border: '1px solid #2a2e3a', borderRadius: '0', padding: '8px' }}
                 itemStyle={{ color: isUp ? '#00f090' : '#ff2e51', fontFamily: 'Space Mono', fontSize: '10px' }}
