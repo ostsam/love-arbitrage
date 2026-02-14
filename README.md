@@ -49,6 +49,43 @@ The application relies on a Hono server running as a Supabase Edge Function. To 
 2. Run `supabase start`.
 3. Deploy or run functions locally using `supabase functions serve server`.
 
+## Telegram Bot Audio Upload
+The server function now includes Telegram bot routes so users can send audio/voice messages and have them uploaded via Bot API.
+
+### Required Edge Function Environment Variables
+Set these for the `server` edge function in Supabase:
+
+```env
+TELEGRAM_BOT_TOKEN=123456789:your_bot_token_from_botfather
+TELEGRAM_WEBHOOK_SECRET=choose_a_random_secret_string
+TELEGRAM_UPLOAD_CHAT_ID=-1001234567890
+TELEGRAM_WEBHOOK_URL=https://<your-project-ref>.supabase.co/functions/v1/server/telegram/webhook
+```
+
+- `TELEGRAM_BOT_TOKEN` is required.
+- `TELEGRAM_WEBHOOK_SECRET` is optional but strongly recommended.
+- `TELEGRAM_UPLOAD_CHAT_ID` is optional. If omitted, uploads stay in the sender chat.
+- `TELEGRAM_WEBHOOK_URL` is optional if you pass `webhookUrl` in setup request.
+
+### Setup Webhook
+After deploying the `server` function, call:
+
+```bash
+curl -X POST "https://<your-project-ref>.supabase.co/functions/v1/server/telegram/setup-webhook" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "webhookUrl": "https://<your-project-ref>.supabase.co/functions/v1/server/telegram/webhook",
+    "dropPendingUpdates": true
+  }'
+```
+
+### Bot Behavior
+- `/start` returns usage instructions.
+- Sending `audio` triggers `sendAudio`.
+- Sending `voice` triggers `sendVoice`.
+- Sending an audio `document` triggers `sendDocument`.
+- Messages are uploaded to `TELEGRAM_UPLOAD_CHAT_ID` if set; otherwise they remain in the source chat.
+
 ## Access Codes
 - **Private Equity Terminal**: `ROMANCE-ALPHA-2026`
 
