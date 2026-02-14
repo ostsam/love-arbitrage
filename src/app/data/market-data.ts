@@ -1,4 +1,18 @@
-export const ALL_ASSETS = [
+type Volatility = 'LOW' | 'MED' | 'HIGH' | 'EXTREME';
+type Category = 'Public' | 'Private';
+
+interface Asset {
+  symbol: string;
+  names: string;
+  price: string;
+  change: string;
+  isUp: boolean;
+  volatility: Volatility;
+  category: Category;
+  image: string;
+}
+
+export const ALL_ASSETS: Asset[] = [
   { symbol: '$TAY-TRAV', names: 'Taylor Swift & Travis Kelce', price: '42.50', change: '+2.4%', isUp: true, volatility: 'MED', category: 'Public', image: 'https://images.unsplash.com/photo-1573023512520-4f10a31b4a07?q=80&w=500' },
   { symbol: '$BEN-JEN', names: 'Ben Affleck & Jennifer Lopez', price: '12.15', change: '-15.2%', isUp: false, volatility: 'EXTREME', category: 'Public', image: 'https://images.unsplash.com/photo-1618333858238-c174ee56a54d?q=80&w=500' },
   { symbol: '$TOM-ZEND', names: 'Tom Holland & Zendaya', price: '89.90', change: '+8.9%', isUp: true, volatility: 'LOW', category: 'Public', image: 'https://images.unsplash.com/photo-1700557477628-c200fa4cd6da?q=80&w=500' },
