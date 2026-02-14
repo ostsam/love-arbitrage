@@ -1,14 +1,24 @@
 import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
+import { supabase } from '/src/utils/supabase/client';
 import { Ticker } from './components/Ticker';
 import { GlobalIndexChart } from './components/GlobalIndexChart';
 import { MarketCard } from './components/MarketCard';
 import { CandlestickChart } from './components/CandlestickChart';
 import { AnalysisOverlay } from './components/AnalysisOverlay';
+import { AssetDetailView } from './components/AssetDetailView';
 import { Sidebar } from './components/Sidebar';
 import { MarketSection } from './components/MarketSection';
 import { ProfileSection } from './components/ProfileSection';
-import { ALL_ASSETS, RECENT_BETS } from './data/market-data';
+import { InsiderSection } from './components/InsiderSection';
+import { LeaderboardSection } from './components/LeaderboardSection';
+import { Auth } from './components/Auth';
+import { FriendsSearch } from './components/FriendsSearch';
+import { Onboarding } from './components/Onboarding';
+import { PrivateEquitySection } from './components/PrivateEquitySection';
+import { ALL_ASSETS, RECENT_BETS, PropBet } from './data/market-data';
 import { ImageWithFallback } from './components/figma/ImageWithFallback';
+import { OrderEntryModal } from './components/OrderEntryModal';
 import { 
   TrendingDown, 
   Mic, 
@@ -21,22 +31,88 @@ import {
   TrendingUp,
   ShieldAlert,
   LogIn,
-  X
+  X,
+  Database,
+  Trophy,
+  History,
+  Users,
+  UserPlus,
+  LogOut
 } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
 import { projectId, publicAnonKey } from '/utils/supabase/info';
+import { apiFetch } from './utils/api';
 
-const API_BASE = `https://${projectId}.supabase.co/functions/v1/make-server-c0ec1358`;
-
-const Dashboard = ({ onSelectAsset, onUpload }: { onSelectAsset: (asset: any) => void, onUpload: () => void }) => {
+const Dashboard = ({ 
+  onSelectAsset, 
+  onUpload,
+  onPropTrade
+}: { 
+  onSelectAsset: (asset: any) => void, 
+  onUpload: () => void,
+  onPropTrade: (symbol: string, side: 'YES' | 'NO', betId: string) => void
+}) => {
   const publicMarket = ALL_ASSETS.filter(a => a.category === 'Public').slice(0, 4);
   const privateEquity = ALL_ASSETS.filter(a => a.category === 'Private').slice(0, 2);
+  const trendingProps = ALL_ASSETS.flatMap(a => (a.propBets || []).map(b => ({ ...b, symbol: a.symbol }))).slice(0, 3);
 
   return (
     <div className="flex-1 overflow-y-auto bg-[#0a0b0d]">
       <div className="p-4 space-y-4">
         <GlobalIndexChart />
         
+        {/* Trending Prop Markets (Kalshi style) */}
+        <section className="space-y-3">
+          <div className="flex justify-between items-center border-b border-[#2a2e3a] pb-2">
+            <h2 className="font-['Oswald'] font-bold text-xs tracking-widest uppercase text-ghost-white flex items-center gap-2">
+              <History size={14} className="text-[#00f090]" />
+              TRENDING_PROP_MARKETS
+            </h2>
+            <span className="font-['Space_Mono'] text-[9px] text-[#717182]">HOT_ACTION</span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {trendingProps.map((prop, i) => (
+              <div 
+                key={i} 
+                onClick={() => onSelectAsset(ALL_ASSETS.find(a => a.symbol === prop.symbol))}
+                className="bg-[#1e222d] border border-[#2a2e3a] p-3 space-y-3 hover:border-[#00f090] transition-colors cursor-pointer group"
+              >
+                <div className="flex justify-between items-start">
+                  <span className="text-[9px] font-bold text-[#00f090] uppercase">{prop.symbol}</span>
+                  <span className="text-[8px] text-[#717182] uppercase">{prop.expiry}</span>
+                </div>
+                <p className="font-['Space_Mono'] text-[11px] font-bold text-ghost-white group-hover:text-[#00f090] transition-colors italic leading-tight mb-2">
+                  "{prop.question}"
+                </p>
+                <div className="flex justify-between items-center text-[9px] font-bold uppercase mb-1 px-1">
+                  <span className="text-[#00f090]">{prop.yesOdds}</span>
+                  <span className="text-[#ff2e51]">{prop.noOdds}</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onPropTrade(prop.symbol, 'YES', prop.id);
+                    }}
+                    className="bg-transparent py-2 border border-[#00f090]/60 text-center hover:bg-[#00f090] hover:text-[#0a0b0d] transition-all cursor-pointer text-[10px] font-black text-[#00f090]"
+                  >
+                    YES
+                  </div>
+                  <div 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onPropTrade(prop.symbol, 'NO', prop.id);
+                    }}
+                    className="bg-transparent py-2 border border-[#ff2e51]/60 text-center hover:bg-[#ff2e51] hover:text-white transition-all cursor-pointer text-[10px] font-black text-[#ff2e51]"
+                  >
+                    NO
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <section className="space-y-3">
             <div className="flex justify-between items-center border-b border-[#2a2e3a] pb-2">
@@ -48,7 +124,12 @@ const Dashboard = ({ onSelectAsset, onUpload }: { onSelectAsset: (asset: any) =>
             </div>
             <div className="space-y-2">
               {publicMarket.map((asset) => (
-                <MarketCard key={asset.symbol} {...asset} onClick={() => onSelectAsset(asset)} />
+                <MarketCard 
+                  key={asset.symbol} 
+                  {...asset} 
+                  hasProps={!!asset.propBets?.length}
+                  onClick={() => onSelectAsset(asset)} 
+                />
               ))}
             </div>
           </section>
@@ -63,7 +144,12 @@ const Dashboard = ({ onSelectAsset, onUpload }: { onSelectAsset: (asset: any) =>
             </div>
             <div className="space-y-2">
               {privateEquity.map((asset) => (
-                <MarketCard key={asset.symbol} {...asset} onClick={() => onSelectAsset(asset)} />
+                <MarketCard 
+                  key={asset.symbol} 
+                  {...asset} 
+                  hasProps={!!asset.propBets?.length}
+                  onClick={() => onSelectAsset(asset)} 
+                />
               ))}
             </div>
             
@@ -87,109 +173,90 @@ const Dashboard = ({ onSelectAsset, onUpload }: { onSelectAsset: (asset: any) =>
   );
 };
 
-const AssetDetailView = ({ asset, onBack, onBet }: { asset: any, onBack: () => void, onBet: (side: 'long' | 'short') => void }) => (
-  <div className="flex-1 overflow-y-auto bg-[#0a0b0d]">
-    <div className="p-4 space-y-4">
-      <button 
-        onClick={onBack}
-        className="flex items-center gap-1 text-[#717182] hover:text-[#00f090] text-[10px] font-bold uppercase transition-colors"
-      >
-        <ChevronRight size={14} className="rotate-180" /> Back to Terminal
-      </button>
-
-      <div className="flex justify-between items-end border-b border-[#2a2e3a] pb-4">
-        <div>
-          <div className="flex items-center gap-3 mb-2">
-            <span className="bg-[#00f090] text-[#0a0b0d] px-2 py-0.5 font-['Space_Mono'] font-bold text-sm">ASSET</span>
-            <h1 className="font-['Space_Mono'] text-4xl font-bold tracking-tighter text-ghost-white leading-none">
-              {asset.symbol}
-            </h1>
-          </div>
-          <p className="font-['Oswald'] text-xs text-[#717182] uppercase tracking-widest">{asset.names}</p>
-        </div>
-        <div className="text-right">
-          <div className="font-['Space_Mono'] text-3xl font-bold text-ghost-white">${asset.price}</div>
-          <div className={`font-['Space_Mono'] text-sm font-bold ${asset.isUp ? 'text-[#00f090]' : 'text-[#ff2e51]'}`}>
-            {asset.change} (LIFETIME)
-          </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="lg:col-span-2 space-y-4">
-          <div className="relative">
-            <CandlestickChart />
-            <div className="absolute top-4 left-4 flex gap-2">
-              <span className="bg-[#0a0b0d] border border-[#2a2e3a] px-2 py-1 text-[9px] text-[#00f090] font-bold">1H</span>
-              <span className="bg-[#0a0b0d] border border-[#2a2e3a] px-2 py-1 text-[9px] text-[#717182] font-bold">4H</span>
-              <span className="bg-[#0a0b0d] border border-[#2a2e3a] px-2 py-1 text-[9px] text-[#717182] font-bold">1D</span>
-            </div>
-            
-            {/* Event Annotations */}
-            <div className="absolute top-1/2 left-1/4 -translate-y-1/2 pointer-events-none">
-              <div className="bg-[#ff2e51] text-white text-[8px] px-1 font-bold mb-1">FIGHT ABOUT DISHES</div>
-              <div className="w-px h-12 bg-[#ff2e51] mx-auto"></div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-3 gap-2">
-            {['PE RATIO: 4.2', 'BETA: 1.85', 'VOLATILITY: HIGH', 'MARKET CAP: $2.4B', 'DIVIDEND: 0%', 'P/E: N/A'].map(stat => (
-              <div key={stat} className="bg-[#1e222d] border border-[#2a2e3a] p-2 font-['Space_Mono'] text-[9px] text-[#717182]">
-                {stat}
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="space-y-4">
-          <section className="bg-[#1e222d] border border-[#2a2e3a] h-full flex flex-col">
-            <div className="p-3 border-b border-[#2a2e3a] flex items-center gap-2">
-              <MessageSquare size={14} className="text-[#00f090]" />
-              <h3 className="font-['Oswald'] text-xs uppercase tracking-widest text-ghost-white">Insider Trading Feed</h3>
-            </div>
-            <div className="flex-1 p-3 space-y-4 overflow-y-auto max-h-[300px]">
-              {INSIDER_TRADING.map((item, i) => (
-                <div key={i} className="space-y-1">
-                  <div className="flex justify-between items-center">
-                    <span className="text-[10px] font-bold text-[#00f090]">{item.user}</span>
-                    <span className="text-[9px] text-[#717182]">{item.time}</span>
-                  </div>
-                  <p className="text-[11px] text-ghost-white leading-relaxed bg-[#0a0b0d] p-2 border-l-2 border-[#00f090]">
-                    {item.quote}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </section>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-4 pt-4">
-        <button 
-          onClick={() => onBet('long')}
-          className="h-16 bg-[#00f090] text-[#0a0b0d] font-bold text-xl uppercase tracking-tighter hover:brightness-110 transition-all flex flex-col items-center justify-center"
-        >
-          LONG
-          <span className="text-[10px] opacity-70">BET ON MARRIAGE</span>
-        </button>
-        <button 
-          onClick={() => onBet('short')}
-          className="h-16 bg-[#ff2e51] text-white font-bold text-xl uppercase tracking-tighter hover:brightness-110 transition-all flex flex-col items-center justify-center"
-        >
-          SHORT
-          <span className="text-[10px] opacity-70">BET ON BREAKUP</span>
-        </button>
-      </div>
-    </div>
-  </div>
-);
-
 export default function App() {
+  const [session, setSession] = useState<any>(null);
+  const [userProfile, setUserProfile] = useState<any>(null);
   const [selectedAsset, setSelectedAsset] = useState<any>(null);
   const [isCrunching, setIsCrunching] = useState(false);
   const [currentTab, setCurrentTab] = useState('dashboard');
   const [searchQuery, setSearchQuery] = useState('');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isFriendsModalOpen, setIsFriendsModalOpen] = useState(false);
+  
+  const [modalState, setModalState] = useState<{
+    isOpen: boolean;
+    asset?: any;
+    betType: 'LONG' | 'SHORT' | 'YES' | 'NO';
+    question?: string;
+    odds?: string;
+  }>({
+    isOpen: false,
+    betType: 'LONG'
+  });
+
+  // Check for session on mount
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      if (session) fetchProfile(session.access_token);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      if (session) fetchProfile(session.access_token);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const fetchProfile = async (token: string) => {
+    try {
+      const response = await apiFetch('/profile', {}, token);
+      const data = await response.json();
+      if (!response.ok) {
+        console.warn('Profile fetch rejected:', data);
+        return;
+      }
+      setUserProfile(data);
+    } catch (err) {
+      console.error('Profile network error:', err);
+    }
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setSession(null);
+    setUserProfile(null);
+    toast.info('SESSION_TERMINATED: NODE_OFFLINE');
+  };
+
+  // Simulation effect for "Margin Calls" and "Intercepts"
+  useEffect(() => {
+    if (!session) return;
+    const interval = setInterval(() => {
+      const types = ['margin', 'intercept', 'alert'];
+      const type = types[Math.floor(Math.random() * types.length)];
+      
+      if (type === 'margin') {
+        toast.error("MARGIN CALL: Operator 'DIVORCE_REAPER' liquidated for $2.4M on $TAY-TRAV short.", {
+          duration: 5000,
+          icon: <ShieldAlert size={16} />
+        });
+      } else if (type === 'intercept') {
+        toast.info("LIVE INTERCEPT: '$BEN-JEN' keyword 'moving_truck' detected in 90210 area.", {
+          duration: 4000,
+          icon: <Database size={16} />
+        });
+      } else {
+        toast.warning("VIBE SHIFT: Global Love Index falling sharply. High volatility expected.", {
+          duration: 4000,
+          icon: <AlertCircle size={16} />
+        });
+      }
+    }, 45000);
+
+    return () => clearInterval(interval);
+  }, [session]);
 
   const handleUpload = () => {
     toast.info("Initializing audio stream...");
@@ -203,29 +270,63 @@ export default function App() {
     setSelectedAsset(ALL_ASSETS.find(a => a.symbol === '$CHAD-BRITT'));
   };
 
-  const handlePlaceBet = async (side: 'long' | 'short') => {
+  const handlePlaceBet = async (side: 'long' | 'short' | 'yes' | 'no', propBet?: PropBet) => {
     if (!selectedAsset) return;
-    
-    const promise = fetch(`${API_BASE}/place-bet`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${publicAnonKey}`
-      },
-      body: JSON.stringify({
-        symbol: selectedAsset.symbol,
-        side,
-        amount: 100,
-        userId: 'anonymous'
-      })
-    });
-
-    toast.promise(promise, {
-      loading: 'Executing market order...',
-      success: (data) => `Order filled: ${side.toUpperCase()} @ ${selectedAsset.price}`,
-      error: 'Order failed: Insufficient liquidity'
+    setModalState({
+      isOpen: true,
+      asset: selectedAsset,
+      betType: side.toUpperCase() as any,
+      question: propBet?.question,
+      odds: propBet ? (side === 'yes' ? propBet.yesOdds : propBet.noOdds) : undefined
     });
   };
+
+  const handleGlobalPropTrade = (symbol: string, side: 'YES' | 'NO', betId: string) => {
+    const asset = ALL_ASSETS.find(a => a.symbol === symbol);
+    const bet = asset?.propBets?.find(b => b.id === betId);
+    if (asset && bet) {
+      setModalState({
+        isOpen: true,
+        asset,
+        betType: side,
+        question: bet.question,
+        odds: side === 'YES' ? bet.yesOdds : bet.noOdds
+      });
+    }
+  };
+
+  const confirmTrade = (amount: number) => {
+    toast.success(`Position confirmed: ${modalState.betType} $${amount}`, {
+      description: `Target: ${modalState.asset?.symbol} @ ${modalState.asset?.price}`,
+      icon: <Zap size={14} className="text-[#00f090]" />
+    });
+    setModalState(prev => ({ ...prev, isOpen: false }));
+  };
+
+  if (!session) {
+    return (
+      <>
+        <Toaster position="top-center" theme="dark" richColors />
+        <Auth onAuth={setSession} />
+      </>
+    );
+  }
+
+  if (userProfile && !userProfile.onboarded) {
+    return (
+      <>
+        <Toaster position="top-center" theme="dark" richColors />
+        <Onboarding 
+          accessToken={session.access_token} 
+          projectId={projectId} 
+          onComplete={(profile) => {
+            setUserProfile(profile);
+            toast.success('TERMINAL_INITIALIZED');
+          }} 
+        />
+      </>
+    );
+  }
 
   const renderContent = () => {
     if (selectedAsset) {
@@ -240,12 +341,30 @@ export default function App() {
 
     switch (currentTab) {
       case 'dashboard':
-        return <Dashboard onSelectAsset={setSelectedAsset} onUpload={handleUpload} />;
+        return (
+          <Dashboard 
+            onSelectAsset={setSelectedAsset} 
+            onUpload={() => setCurrentTab('private')} 
+            onPropTrade={handleGlobalPropTrade}
+          />
+        );
       case 'market':
         return <MarketSection onSelectAsset={setSelectedAsset} searchQuery={searchQuery} />;
+      case 'private':
+        return (
+          <PrivateEquitySection 
+            accessToken={session.access_token} 
+            projectId={projectId} 
+            onSelectAsset={setSelectedAsset}
+          />
+        );
+      case 'insider':
+        return <InsiderSection />;
+      case 'leaderboard':
+        return <LeaderboardSection />;
       case 'profile':
       case 'portfolio':
-        return <ProfileSection />;
+        return <ProfileSection profile={userProfile} accessToken={session.access_token} />;
       default:
         return (
           <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-[#0a0b0d]">
@@ -301,7 +420,7 @@ export default function App() {
               <Search size={14} className="text-[#717182]" />
               <input 
                 type="text" 
-                placeholder="SEARCH ASSETS..." 
+                placeholder="SEARCH TICKERS..." 
                 value={searchQuery}
                 onChange={(e) => {
                   setSearchQuery(e.target.value);
@@ -310,31 +429,36 @@ export default function App() {
                 className="bg-transparent border-none outline-none font-['Space_Mono'] text-[10px] w-64 text-[#00f090] uppercase"
               />
               {searchQuery && (
-                <button onClick={() => setSearchQuery('')}>
+                <button onClick={() => setSearchQuery('')} className="cursor-pointer">
                   <X size={12} className="text-[#717182] hover:text-white" />
                 </button>
               )}
             </div>
             <div className="flex gap-4 items-center">
-              <div className="text-right border-l border-[#2a2e3a] pl-4">
-                <div className="text-[9px] text-[#717182] font-bold uppercase">Margin Balance</div>
-                <div className="font-['Space_Mono'] text-xs font-bold text-[#00f090]">$14,204.67</div>
+              <button 
+                onClick={() => setIsFriendsModalOpen(true)}
+                className="p-2 bg-[#1e222d] border border-[#2a2e3a] text-[#717182] hover:text-[#00f090] transition-colors"
+              >
+                <UserPlus size={18} />
+              </button>
+              <div className="text-right border-l border-[#2a2e3a] pl-4 flex flex-col items-end">
+                <div className="text-[9px] text-[#717182] font-bold uppercase flex items-center gap-1">
+                   <div className="w-1 h-1 bg-[#00f090] rounded-full animate-pulse" />
+                   {userProfile?.name || 'NODE_PENDING'}
+                </div>
+                <div className="font-['Space_Mono'] text-xs font-bold text-[#00f090]">
+                  ${userProfile?.balance?.toLocaleString() || '10,000.00'}
+                </div>
               </div>
-              <div className="relative group">
-                <Bell size={20} className="text-[#717182] group-hover:text-[#00f090] cursor-pointer" />
-                <span className="absolute -top-1 -right-1 w-2 h-2 bg-[#ff2e51] border border-[#0a0b0d]"></span>
-              </div>
+              <button onClick={handleLogout} className="p-2 text-[#717182] hover:text-[#ff2e51] transition-colors">
+                <LogOut size={20} />
+              </button>
             </div>
-          </div>
-          
-          <div className="md:hidden">
-            <LogIn size={20} className="text-[#00f090]" />
           </div>
         </div>
       </header>
 
       <div className="flex flex-1 overflow-hidden relative">
-        {/* Sidebar */}
         <div className={`${isSidebarOpen ? 'flex' : 'hidden'} md:flex shrink-0 z-20`}>
           <Sidebar 
             currentTab={currentTab} 
@@ -346,14 +470,52 @@ export default function App() {
           />
         </div>
 
-        {/* Main Content View */}
         <main className="flex-1 flex flex-col relative overflow-hidden">
           {renderContent()}
         </main>
       </div>
 
-      {/* Analysis Modal */}
       <AnalysisOverlay isOpen={isCrunching} onClose={handleAnalysisComplete} />
+
+      {/* Friends Search Modal */}
+      <AnimatePresence>
+        {isFriendsModalOpen && (
+          <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-[#0a0b0d] border border-[#2a2e3a] w-full max-w-md overflow-hidden"
+            >
+              <div className="border-b border-[#2a2e3a] p-4 flex justify-between items-center bg-[#1e222d]">
+                <h2 className="font-['Oswald'] text-xs font-bold uppercase tracking-[0.2em] text-ghost-white flex items-center gap-2">
+                  <Users size={14} className="text-[#00f090]" />
+                  EXPAND_NETWORK
+                </h2>
+                <button onClick={() => setIsFriendsModalOpen(false)} className="text-[#717182] hover:text-white">
+                  <X size={16} />
+                </button>
+              </div>
+              <div className="p-6">
+                <FriendsSearch accessToken={session.access_token} onAdd={() => {}} />
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Global Order Modal */}
+      {modalState.asset && (
+        <OrderEntryModal 
+          isOpen={modalState.isOpen}
+          onClose={() => setModalState(prev => ({ ...prev, isOpen: false }))}
+          asset={modalState.asset}
+          betType={modalState.betType}
+          question={modalState.question}
+          odds={modalState.odds}
+          onConfirm={confirmTrade}
+        />
+      )}
 
       {/* Footer / Status Bar */}
       <footer className="border-t border-[#2a2e3a] bg-[#0a0b0d] py-1 px-4 flex justify-between items-center shrink-0">
@@ -362,12 +524,11 @@ export default function App() {
             <div className="w-1.5 h-1.5 bg-[#00f090] animate-pulse"></div>
             <span className="font-['Space_Mono'] text-[8px] text-[#00f090]">SYSTEM_OK</span>
           </div>
-          <span className="font-['Space_Mono'] text-[8px] text-[#717182] hidden md:inline">ENCRYPTION: AES-256</span>
+          <span className="font-['Space_Mono'] text-[8px] text-[#717182] hidden md:inline">NODE_ID: {userProfile?.id?.slice(0, 8) || 'GUEST'}</span>
           <span className="font-['Space_Mono'] text-[8px] text-[#717182]">LATENCY: 14MS</span>
         </div>
         <div className="font-['Space_Mono'] text-[8px] text-[#717182] uppercase flex gap-4">
-          <span className="hidden md:inline">S&P 500: -1.2%</span>
-          <span>LOVE INDEX: BEARISH</span>
+          <span>{userProfile?.name || 'USER'}_SESSION_ACTIVE</span>
           <span className="hidden sm:inline">© 2026 LOVE ARBITRAGE</span>
         </div>
       </footer>

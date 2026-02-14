@@ -46,7 +46,12 @@ export const MarketSection: React.FC<MarketSectionProps> = ({ onSelectAsset, sea
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
         {filteredAssets.length > 0 ? (
           filteredAssets.map(asset => (
-            <MarketCard key={asset.symbol} {...asset} onClick={() => onSelectAsset(asset)} />
+            <MarketCard 
+              key={asset.symbol} 
+              {...asset} 
+              hasProps={!!asset.propBets?.length}
+              onClick={() => onSelectAsset(asset)} 
+            />
           ))
         ) : (
           <div className="col-span-full py-20 text-center border border-dashed border-[#2a2e3a]">
