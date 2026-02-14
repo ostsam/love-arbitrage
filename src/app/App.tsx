@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from '/src/utils/supabase/client';
 import { Ticker } from './components/Ticker';
@@ -29,6 +29,7 @@ import {
   MessageSquare, 
   AlertCircle,
   TrendingUp,
+  Zap,
   ShieldAlert,
   LogIn,
   X,
@@ -42,15 +43,38 @@ import {
 import { Toaster, toast } from 'sonner';
 import { projectId, publicAnonKey } from '/utils/supabase/info';
 import { apiFetch } from './utils/api';
+import { RecordingService } from '../../services/services/recording';
+
+const DEFAULT_WIRETAP_SYMBOL = '$CHAD-BRITT';
+
+const hydrateAssetFromMarket = (
+  symbol: string,
+  market?: { price: number; change: number },
+) => {
+  const base = ALL_ASSETS.find((asset) => asset.symbol === symbol);
+  if (!base) return null;
+  if (!market) return base;
+
+  const formattedChange = `${market.change >= 0 ? '+' : ''}${market.change.toFixed(2)}%`;
+
+  return {
+    ...base,
+    price: market.price.toFixed(2),
+    change: formattedChange,
+    isUp: market.change >= 0,
+  };
+};
 
 const Dashboard = ({ 
   onSelectAsset, 
   onUpload,
-  onPropTrade
+  onPropTrade,
+  isUploading,
 }: { 
   onSelectAsset: (asset: any) => void, 
   onUpload: () => void,
-  onPropTrade: (symbol: string, side: 'YES' | 'NO', betId: string) => void
+  onPropTrade: (symbol: string, side: 'YES' | 'NO', betId: string) => void,
+  isUploading: boolean,
 }) => {
   const publicMarket = ALL_ASSETS.filter(a => a.category === 'Public').slice(0, 4);
   const privateEquity = ALL_ASSETS.filter(a => a.category === 'Private').slice(0, 2);
@@ -161,9 +185,10 @@ const Dashboard = ({
               </div>
               <button 
                 onClick={onUpload}
-                className="w-full py-2 border border-[#ff2e51] text-[#ff2e51] font-bold text-[10px] hover:bg-[#ff2e51] hover:text-white transition-all"
+                disabled={isUploading}
+                className="w-full py-2 border border-[#ff2e51] text-[#ff2e51] font-bold text-[10px] hover:bg-[#ff2e51] hover:text-white transition-all disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                INITIALIZE WIRETAP
+                {isUploading ? 'PROCESSING WIRETAP...' : 'INITIALIZE WIRETAP'}
               </button>
             </div>
           </section>
@@ -182,6 +207,10 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isFriendsModalOpen, setIsFriendsModalOpen] = useState(false);
+  const [isUploadingEvidence, setIsUploadingEvidence] = useState(false);
+  const [lastAnalyzedSymbol, setLastAnalyzedSymbol] = useState<string | null>(null);
+  const [latestMarkets, setLatestMarkets] = useState<Record<string, { price: number; change: number }>>({});
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   const [modalState, setModalState] = useState<{
     isOpen: boolean;
@@ -259,15 +288,64 @@ export default function App() {
   }, [session]);
 
   const handleUpload = () => {
-    toast.info("Initializing audio stream...");
-    setTimeout(() => {
-      setIsCrunching(true);
-    }, 1000);
+    if (isUploadingEvidence) return;
+    fileInputRef.current?.click();
+  };
+
+  const handleFileSelected = async (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    input.value = '';
+
+    if (!file) return;
+
+    const targetSymbol = selectedAsset?.symbol || DEFAULT_WIRETAP_SYMBOL;
+    setIsUploadingEvidence(true);
+    setIsCrunching(true);
+    toast.info(`Uploading wiretap evidence for ${targetSymbol}...`);
+
+    try {
+      const result = await RecordingService.analyzeRecording(file, targetSymbol);
+      setLastAnalyzedSymbol(result.symbol);
+      setLatestMarkets((current) => ({
+        ...current,
+        [result.symbol]: {
+          price: result.market.price,
+          change: result.market.change,
+        },
+      }));
+
+      toast.success(result.update.headline || `Wiretap analysis complete for ${result.symbol}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Wiretap analysis failed';
+      toast.error(message);
+      setIsCrunching(false);
+      setLastAnalyzedSymbol(null);
+    } finally {
+      setIsUploadingEvidence(false);
+    }
   };
 
   const handleAnalysisComplete = () => {
     setIsCrunching(false);
-    setSelectedAsset(ALL_ASSETS.find(a => a.symbol === '$CHAD-BRITT'));
+
+    if (lastAnalyzedSymbol) {
+      const hydratedAsset = hydrateAssetFromMarket(
+        lastAnalyzedSymbol,
+        latestMarkets[lastAnalyzedSymbol],
+      );
+      if (hydratedAsset) {
+        setSelectedAsset(hydratedAsset);
+      } else {
+        setSelectedAsset(ALL_ASSETS.find((asset) => asset.symbol === lastAnalyzedSymbol));
+      }
+      setLastAnalyzedSymbol(null);
+      return;
+    }
+
+    setSelectedAsset(ALL_ASSETS.find((a) => a.symbol === '$CHAD-BRITT'));
   };
 
   const handlePlaceBet = async (side: 'long' | 'short' | 'yes' | 'no', propBet?: PropBet) => {
@@ -344,8 +422,9 @@ export default function App() {
         return (
           <Dashboard 
             onSelectAsset={setSelectedAsset} 
-            onUpload={() => setCurrentTab('private')} 
+            onUpload={handleUpload}
             onPropTrade={handleGlobalPropTrade}
+            isUploading={isUploadingEvidence}
           />
         );
       case 'market':
@@ -389,6 +468,14 @@ export default function App() {
   return (
     <div className="flex flex-col h-screen bg-[#0a0b0d] text-ghost-white selection:bg-[#00f090] selection:text-[#0a0b0d] font-['Space_Mono']">
       <Toaster position="top-center" theme="dark" richColors />
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="audio/*,.wav,.mp3,.m4a,.webm,.ogg"
+        className="hidden"
+        onChange={handleFileSelected}
+      />
       
       {/* Top Navigation */}
       <header className="border-b border-[#2a2e3a] bg-[#0a0b0d] z-30 shrink-0">
@@ -534,10 +621,11 @@ export default function App() {
       </footer>
 
       {/* Upload FAB */}
-      {currentTab === 'dashboard' && !selectedAsset && (
+      {(currentTab === 'dashboard' || Boolean(selectedAsset)) && (
         <button 
           onClick={handleUpload}
-          className="fixed bottom-10 right-6 w-16 h-16 bg-[#00f090] hover:scale-110 transition-transform active:scale-95 flex flex-col items-center justify-center group shadow-[0_0_20px_rgba(0,240,144,0.3)] z-40"
+          disabled={isUploadingEvidence}
+          className="fixed bottom-10 right-6 w-16 h-16 bg-[#00f090] hover:scale-110 transition-transform active:scale-95 flex flex-col items-center justify-center group shadow-[0_0_20px_rgba(0,240,144,0.3)] z-40 disabled:opacity-60 disabled:cursor-not-allowed"
         >
           <Mic size={24} className="text-[#0a0b0d]" />
           <span className="text-[8px] font-bold text-[#0a0b0d] mt-1">WIRETAP</span>
