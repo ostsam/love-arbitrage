@@ -8,8 +8,9 @@ interface MarketCardProps {
   price: string;
   change: string;
   isUp: boolean;
-  volatility?: 'LOW' | 'MED' | 'HIGH' | 'EXTREME';
+  volatility?: 'LOW' | 'MED' | 'HIGH' | 'EXTREME' | 'CRITICAL';
   image: string;
+  hasProps?: boolean;
   onClick?: () => void;
 }
 
@@ -21,14 +22,18 @@ export const MarketCard: React.FC<MarketCardProps> = ({
   isUp,
   volatility = 'MED',
   image,
+  hasProps,
   onClick
 }) => {
   const volColor = {
     LOW: 'text-blue-400 border-blue-400',
     MED: 'text-yellow-400 border-yellow-400',
     HIGH: 'text-orange-500 border-orange-500',
-    EXTREME: 'text-red-500 border-red-500 animate-pulse'
+    EXTREME: 'text-red-500 border-red-500 animate-pulse',
+    CRITICAL: 'text-red-600 border-red-600 bg-red-600/10'
   }[volatility];
+
+  const isLeveraged = volatility === 'EXTREME' || volatility === 'CRITICAL';
 
   return (
     <div 
@@ -50,6 +55,18 @@ export const MarketCard: React.FC<MarketCardProps> = ({
           {volatility} VOL
         </div>
       </div>
+
+      {hasProps && (
+        <div className="absolute top-0 right-0 translate-x-1/4 -translate-y-1/4 bg-[#00f090] text-[#0a0b0d] text-[8px] px-1.5 py-0.5 font-bold italic tracking-tighter z-10">
+          EVENT_ACTIVE
+        </div>
+      )}
+
+      {isLeveraged && (
+        <div className="absolute -top-1 left-2 bg-red-600 text-white text-[7px] px-1 font-black tracking-widest uppercase z-10">
+          20X_LEVERAGE_AVAIL
+        </div>
+      )}
 
       <div className="flex justify-between items-end">
         <div>
