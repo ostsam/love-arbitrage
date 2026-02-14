@@ -34,6 +34,7 @@ const getSupabase = () => {
 
 const DEEPGRAM_LISTEN_URL = 'https://api.deepgram.com/v1/listen'
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions'
+const TELEGRAM_API_BASE_URL = 'https://api.telegram.org'
 
 type RelationshipDirection = 'LONG' | 'SHORT' | 'HOLD'
 type RelationshipState = 'strengthening' | 'deteriorating' | 'mixed' | 'unclear'
@@ -47,6 +48,23 @@ interface RelationshipAnalysis {
   marketMovePercent: number
   rationale: string
   marketUpdateText: string
+}
+
+interface TelegramMessage {
+  message_id: number
+  chat: { id: number | string }
+  text?: string
+  caption?: string
+  audio?: { file_id: string }
+  voice?: { file_id: string }
+  document?: { file_id: string; mime_type?: string }
+}
+
+interface TelegramUpdate {
+  update_id: number
+  message?: TelegramMessage
+  edited_message?: TelegramMessage
+  channel_post?: TelegramMessage
 }
 
 const clamp = (value: number, min: number, max: number) =>
@@ -374,6 +392,57 @@ const applyMarketUpdate = async (symbol: string, movePercent: number, confidence
   return marketSnapshot
 }
 
+const getTelegramBotToken = (): string => {
+  const token = Deno.env.get('TELEGRAM_BOT_TOKEN')?.trim()
+  if (!token) {
+    throw new Error('TELEGRAM_BOT_TOKEN is not configured in function environment')
+  }
+  return token
+}
+
+const callTelegramApi = async <T = unknown>(method: string, payload: Record<string, unknown>): Promise<T> => {
+  const token = getTelegramBotToken()
+  const response = await fetch(`${TELEGRAM_API_BASE_URL}/bot${token}/${method}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+
+  const telegramPayload = await response.json().catch(() => null)
+
+  if (!response.ok || !telegramPayload?.ok) {
+    const fallbackMessage = `Telegram API ${method} failed with status ${response.status}`
+    const message = telegramPayload?.description ?? fallbackMessage
+    throw new Error(message)
+  }
+
+  return telegramPayload.result as T
+}
+
+const getTelegramMessage = (update: TelegramUpdate): TelegramMessage | null =>
+  update.message ?? update.edited_message ?? update.channel_post ?? null
+
+const isAudioDocument = (message: TelegramMessage): boolean =>
+  Boolean(
+    message.document?.file_id &&
+    String(message.document?.mime_type ?? '').toLowerCase().startsWith('audio/'),
+  )
+
+const getUploadTargetChatId = (sourceChatId: string): string =>
+  (Deno.env.get('TELEGRAM_UPLOAD_CHAT_ID') ?? sourceChatId).trim()
+
+const notifyUploadSuccess = async (
+  sourceChatId: string,
+  targetChatId: string,
+) => {
+  if (sourceChatId === targetChatId) return
+
+  await callTelegramApi('sendMessage', {
+    chat_id: sourceChatId,
+    text: `Audio uploaded to ${targetChatId}.`,
+  })
+}
+
 // Helper to handle BOTH prefixed and non-prefixed routes (for robustness across Supabase versions)
 const routeHandler = (path: string, handler: any, method: 'get' | 'post' = 'get', useAuth = true) => {
   const fullPath = path.startsWith('/') ? path : `/${path}`
@@ -609,6 +678,122 @@ routeHandler('place-bet', async (c) => {
   await kv.set(betKey, { symbol, side, amount, timestamp: Date.now() })
 
   return c.json({ success: true, message: `Position ${String(side).toUpperCase()} opened on ${symbol}` })
+}, 'post', false)
+
+routeHandler('telegram/setup-webhook', async (c) => {
+  let body: any = {}
+  try {
+    body = await c.req.json()
+  } catch (_error) {
+    body = {}
+  }
+
+  const webhookUrlFromBody = typeof body.webhookUrl === 'string' ? body.webhookUrl.trim() : ''
+  const webhookUrl = webhookUrlFromBody || (Deno.env.get('TELEGRAM_WEBHOOK_URL') ?? '').trim()
+
+  if (!webhookUrl) {
+    return c.json({
+      error: 'webhookUrl is required',
+      details: 'Provide webhookUrl in body or set TELEGRAM_WEBHOOK_URL in function environment.',
+    }, 400)
+  }
+
+  const allowedUpdates = Array.isArray(body.allowedUpdates)
+    ? body.allowedUpdates.filter((item: unknown) => typeof item === 'string')
+    : ['message', 'edited_message', 'channel_post']
+
+  const result = await callTelegramApi('setWebhook', {
+    url: webhookUrl,
+    secret_token: Deno.env.get('TELEGRAM_WEBHOOK_SECRET') || undefined,
+    drop_pending_updates: body.dropPendingUpdates === true,
+    allowed_updates: allowedUpdates,
+  })
+
+  return c.json({
+    success: true,
+    webhookUrl,
+    result,
+  })
+}, 'post', false)
+
+routeHandler('telegram/webhook', async (c) => {
+  const expectedSecret = Deno.env.get('TELEGRAM_WEBHOOK_SECRET')?.trim()
+  if (expectedSecret) {
+    const receivedSecret = c.req.header('X-Telegram-Bot-Api-Secret-Token')
+    if (receivedSecret !== expectedSecret) {
+      return c.json({
+        error: 'Unauthorized',
+        details: 'Invalid Telegram webhook secret token',
+      }, 401)
+    }
+  }
+
+  let update: TelegramUpdate
+  try {
+    update = await c.req.json()
+  } catch (_error) {
+    return c.json({ ok: true, skipped: 'invalid_json' })
+  }
+
+  const message = getTelegramMessage(update)
+  if (!message) {
+    return c.json({ ok: true, skipped: 'no_message' })
+  }
+
+  const sourceChatId = String(message.chat?.id ?? '').trim()
+  if (!sourceChatId) {
+    return c.json({ ok: true, skipped: 'missing_chat_id' })
+  }
+
+  const normalizedText = String(message.text ?? '').trim().toLowerCase()
+  if (normalizedText === '/start') {
+    await callTelegramApi('sendMessage', {
+      chat_id: sourceChatId,
+      text: [
+        'Send me an audio file or voice note.',
+        'I will upload it using the Telegram Bot API.',
+      ].join('\n'),
+    })
+    return c.json({ ok: true, handled: 'start' })
+  }
+
+  const targetChatId = getUploadTargetChatId(sourceChatId)
+
+  if (message.audio?.file_id) {
+    await callTelegramApi('sendAudio', {
+      chat_id: targetChatId,
+      audio: message.audio.file_id,
+      caption: message.caption ?? undefined,
+    })
+    await notifyUploadSuccess(sourceChatId, targetChatId)
+    return c.json({ ok: true, handled: 'audio', targetChatId })
+  }
+
+  if (message.voice?.file_id) {
+    await callTelegramApi('sendVoice', {
+      chat_id: targetChatId,
+      voice: message.voice.file_id,
+    })
+    await notifyUploadSuccess(sourceChatId, targetChatId)
+    return c.json({ ok: true, handled: 'voice', targetChatId })
+  }
+
+  if (isAudioDocument(message)) {
+    await callTelegramApi('sendDocument', {
+      chat_id: targetChatId,
+      document: message.document?.file_id,
+      caption: message.caption ?? undefined,
+    })
+    await notifyUploadSuccess(sourceChatId, targetChatId)
+    return c.json({ ok: true, handled: 'audio_document', targetChatId })
+  }
+
+  await callTelegramApi('sendMessage', {
+    chat_id: sourceChatId,
+    text: 'Send an audio file or voice note to upload it.',
+  })
+
+  return c.json({ ok: true, handled: 'unsupported_message' })
 }, 'post', false)
 
 routeHandler('market-updates/:symbol', async (c) => {
